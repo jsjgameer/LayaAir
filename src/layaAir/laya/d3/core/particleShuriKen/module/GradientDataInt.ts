@@ -7,6 +7,10 @@ export class GradientDataInt implements IClone {
 	private _currentLength: number = 0;
 	/**@internal 开发者禁止修改。*/
 	_elements: Float32Array;//TODO:是否用int
+	/**@internal 曲线编辑范围*/
+	_curveMin: number = 0;
+	/**@internal 曲线编辑范围*/
+	_curveMax: number = 1;
 
 	/**整形渐变数量。*/
 	get gradientCount(): number {
@@ -19,6 +23,8 @@ export class GradientDataInt implements IClone {
 	constructor() {
 		this._elements = new Float32Array(8);
 	}
+
+
 
 	/**
 	 * 增加整形渐变。
