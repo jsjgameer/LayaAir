@@ -156,6 +156,8 @@ export class GradientAngularVelocity implements IClone {
 	private _gradientW: GradientDataNumber = null;
 
 
+	/**@internal */
+	_constantGradientDdata: GradientDataNumber = null;
 
 	/**@internal */
 	_constantMinGradientDdata: GradientDataNumber = null;
@@ -176,7 +178,7 @@ export class GradientAngularVelocity implements IClone {
 	 */
 	public set _constant(value: number) {
 		this.__constant = value;
-		this._constantMinGradientDdata = GradientDataNumber.createConstantData(value);
+		this._constantGradientDdata = GradientDataNumber.createConstantData(value);
 	}
 
 	/**
@@ -211,6 +213,13 @@ export class GradientAngularVelocity implements IClone {
 
 	private __constantMinSeparate: Vector3 = null;
 	private __constantMaxSeparate: Vector3 = null;
+	//@internal
+	_constantXGradientDdata: GradientDataNumber = null;
+	//@internal
+	_constantYGradientDdata: GradientDataNumber = null;
+	//@internal
+	_constantZGradientDdata: GradientDataNumber = null;
+	
 	//@internal
 	_constantXMinGradientDdata: GradientDataNumber = null;
 	//@internal
