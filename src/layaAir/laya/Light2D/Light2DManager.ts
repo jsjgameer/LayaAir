@@ -15,6 +15,7 @@ import { Vector4 } from "../maths/Vector4";
 import { BaseRenderNode2D } from "../NodeRender2D/BaseRenderNode2D";
 import { ShaderData, ShaderDataType } from "../RenderDriver/DriverDesign/RenderDevice/ShaderData";
 import { IndexFormat } from "../RenderEngine/RenderEnum/IndexFormat";
+import { RenderParams } from "../RenderEngine/RenderEnum/RenderParams";
 import { RenderTargetFormat } from "../RenderEngine/RenderEnum/RenderTargetFormat";
 import { WrapMode } from "../RenderEngine/RenderEnum/WrapMode";
 import { Shader3D } from "../RenderEngine/RenderShader/Shader3D";
@@ -51,6 +52,18 @@ export class Light2DManager implements IElementComponentManager, ILight2DManager
     static SUPPORT_LIGHT_BLEND_MODE = true; //是否支持灯光之间多种模式混合
     static SUPPORT_LIGHT_SCENE_MODE = true; //是否支持灯光场景多种模式混合
 
+    /**
+     * 将光影图尺寸夹到设备 MAX_TEXTURE_SIZE，避免低端机因 outerRadius 过大创建超限 RT 导致 glTexStorage2D / framebuffer incomplete
+     */
+    static clampRTSize(size: number): number {
+        const max = LayaGL.renderEngine.getParams(RenderParams.MAX_Texture_Size);
+        if (max > 0 && size > max) {
+            console.warn(`[Light2D] RT size ${size} exceeds device MAX_TEXTURE_SIZE (${max}), clamped. Reduce light outerRadius/range to avoid visual truncation on low-end devices.`);
+            return max;
+        }
+        return size;
+    }
+
     lsTarget: RenderTexture[] = []; //渲染目标（光影图），数量等于有灯光的层数，相乘模式
     lsTargetAdd: RenderTexture[] = []; //渲染目标（光影图），数量等于有灯光的层数，相加模式
     lsTargetSub: RenderTexture[] = []; //渲染目标（光影图），数量等于有灯光的层数，相减模式
@@ -82,6 +95,7 @@ export class Light2DManager implements IElementComponentManager, ILight2DManager
     private _works: number = 0; //每帧工作负载（渲染光影图次数，每渲染一个灯光算一次）
     private _updateMark: number[] = new Array(Light2DManager.MAX_LAYER).fill(1); //各层的更新标识
     private _updateLayerLight: boolean[] = new Array(Light2DManager.MAX_LAYER).fill(false); //各层是否需要更新光影图
+    private _configChangeCount: number = 0; //记录上次的配置变更次数
     private _spriteLayer: number[] = []; //具有精灵的层序号
     private _spriteNumInLayer: number[] = new Array(Light2DManager.MAX_LAYER).fill(0); //精灵在各层中的数量
     private _lightLayer: number[] = []; //屏幕内具有灯光的层序号
@@ -131,7 +145,11 @@ export class Light2DManager implements IElementComponentManager, ILight2DManager
             Light2DManager._config = new Light2DConfig();
             Light2DManager._config.ambientColor = new Color(light2DConfig.ambientColor.r, light2DConfig.ambientColor.g, light2DConfig.ambientColor.b, light2DConfig.ambientColor.a);
             Light2DManager._config.ambientLayerMask = light2DConfig.ambientLayerMask;
-            Light2DManager._config.lightDirection = new Vector3(light2DConfig.lightDirection.x, light2DConfig.lightDirection.y, light2DConfig.lightDirection.z);
+            if (light2DConfig.lightDirection) {
+                Light2DManager._config.lightDirection = new Vector3(light2DConfig.lightDirection.x, light2DConfig.lightDirection.y, light2DConfig.lightDirection.z);
+            } else {
+                Light2DManager._config.lightDirection = new Vector3(-1, 0, 1);
+            }
             Light2DManager._config.multiSamples = light2DConfig.multiSamples;
         }
         this._scene = scene;
@@ -141,6 +159,7 @@ export class Light2DManager implements IElementComponentManager, ILight2DManager
         this._screenSchmitt = new Rectangle();
         this._screenSchmittChange = false;
         this.occluderAgent = new Occluder2DAgent(this);
+        this._configChangeCount = this.config.changeCount; //初始化配置变更次数
         ILaya.stage.on(Event.RESIZE, this, this._onScreenResize);
 
         this._PCF = [
@@ -159,8 +178,13 @@ export class Light2DManager implements IElementComponentManager, ILight2DManager
             new Vector2(2, 2),
         ];
     }
+    
     destroy(): void {
-        //throw new NotImplementedError();
+        for (let i = this._lightRenderRes.length - 1; i > -1; i--) {
+            if (this._lightRenderRes[i])
+                this._lightRenderRes[i].destroy();
+        }
+        this._lightRenderRes.length = 0;
     }
 
     /**
@@ -439,7 +463,10 @@ export class Light2DManager implements IElementComponentManager, ILight2DManager
                     if (this._lightsInLayerAll[layer].length === 0) //如果受影响的层已经没有灯光，将层序号去除
                         this._lightLayerAll.splice(this._lightLayerAll.indexOf(layer), 1);
                     this._collectLightInScreenByLayer(layer); //收集该层屏幕内的灯光
-                }
+                    //如果该层有RT，标记需要清空RT
+                    if (this.lsTarget[layer])
+                        this._updateLayerLight[layer] = true;
+                    }
             }
             this._lightsNeedCheckRange.splice(this._lightsNeedCheckRange.indexOf(light), 1); //将灯光从该数组中去除
             if (Light2DManager.DEBUG)
@@ -555,8 +582,11 @@ export class Light2DManager implements IElementComponentManager, ILight2DManager
      * @param height 
      */
     private _buildRenderTexture(width: number, height: number) {
+        width = Light2DManager.clampRTSize(width);
+        height = Light2DManager.clampRTSize(height);
         const tex = new RenderTexture(width, height, RenderTargetFormat.R8G8B8A8, null, false, this.config.multiSamples);
         tex.wrapModeU = tex.wrapModeV = WrapMode.Clamp;
+        tex.lock = true;
         return tex;
     }
 
@@ -787,6 +817,14 @@ export class Light2DManager implements IElementComponentManager, ILight2DManager
      * @zh 渲染光影图
      */
     preRenderUpdate() {
+        //检查配置是否变更，如果变更则更新所有层的更新标记以触发uniform更新
+        const currentChangeCount = this.config.changeCount;
+        if (this._configChangeCount !== currentChangeCount) {
+            this._configChangeCount = currentChangeCount;
+            for (let i = this._updateMark.length - 1; i > -1; i--)
+                this._updateMark[i]++;
+        }
+
         //处理场景矩阵变化
         this._sceneTransformChange();
 
@@ -843,6 +881,7 @@ export class Light2DManager implements IElementComponentManager, ILight2DManager
 
         //遍历有灯光的层
         let works = 0;
+        let processedLayerMask = 0; //记录实际处理过的层的掩码
         for (let i = this._lightLayer.length - 1; i > -1; i--) {
             let needRender = false;
             const layer = this._lightLayer[i];
@@ -853,6 +892,7 @@ export class Light2DManager implements IElementComponentManager, ILight2DManager
             const y = this._screenSchmitt.y;
             if (this._spriteNumInLayer[layer] === 0)
                 continue; //该层没有精灵，跳过
+            processedLayerMask |= layerMask; //标记该层已处理
             if (occluders)
                 for (let j = occluders.length - 1; j > -1; j--)
                     occluders[j]._getRange();
@@ -913,19 +953,48 @@ export class Light2DManager implements IElementComponentManager, ILight2DManager
             }
         }
 
-        //清除相关标志
+        //清空没有灯光但仍有RT的层（仅在标记需要清空时执行）
+        let clearedLayerMask = 0;
+        for (let layer = 0; layer < Light2DManager.MAX_LAYER; layer++) {
+            if (this._updateLayerLight[layer] && this._lightLayer.indexOf(layer) === -1) {
+                const renderRes = this._lightRenderRes[layer];
+                if (renderRes) {
+                    if (this._needUpdateLightRes & (1 << layer) || renderRes.lights.length > 0) {
+                        renderRes.addLights([], this._needToRecover);
+                        if (Light2DManager.REUSE_CMD) {
+                            renderRes.setRenderTargetCMD(this.lsTarget[layer], this.lsTargetAdd[layer], this.lsTargetSub[layer]);
+                            renderRes.buildRenderMeshCMD();
+                        }
+                    }
+                    renderRes.render(this.lsTarget[layer], this.lsTargetAdd[layer], this.lsTargetSub[layer]);
+                    this._updateMark[layer]++;
+                    clearedLayerMask |= (1 << layer);
+                }
+                this._updateLayerLight[layer] = false;
+            }
+        }
+
         for (let i = this._lightLayer.length - 1; i > -1; i--) {
             const layer = this._lightLayer[i];
-            const lights = this._lightsInLayer[layer];
-            for (let j = 0, len = lights.length; j < len; j++)
-                lights[j]._needUpdateLightAndShadow = false;
-            for (let j = 0, len = this._occluders.length; j < len; j++)
-                this._occluders[j].needUpdate = false;
+            const layerMask = (1 << layer);
+            //只清除实际处理过的层的标记
+            if (processedLayerMask & layerMask) {
+                const lights = this._lightsInLayer[layer];
+                for (let j = 0, len = lights.length; j < len; j++)
+                    lights[j]._needUpdateLightAndShadow = false;
+            }
+        }
+
+        for (let j = 0, len = this._occluders.length; j < len; j++) {
+            const occluder = this._occluders[j];
+            //如果遮光器所在的层被处理过，才清除其更新标记
+            if (occluder.layerMask & processedLayerMask)
+                occluder.needUpdate = false;
         }
         this._screenSchmittChange = false;
-        this._needUpdateLightRes = 0;
-        this._needCollectLightInLayer = 0;
-        this._needCollectOccluderInLight = 0;
+        this._needUpdateLightRes &= ~(processedLayerMask | clearedLayerMask);
+        this._needCollectLightInLayer &= ~(processedLayerMask | clearedLayerMask);
+        this._needCollectOccluderInLight &= ~(processedLayerMask | clearedLayerMask);
 
         //显示工作负载
         if (Light2DManager.DEBUG) {
@@ -990,50 +1059,37 @@ export class Light2DManager implements IElementComponentManager, ILight2DManager
 
     /**
      * 更新屏幕尺寸和偏移参数
+     * 单 Area2D + Camera2D 时跟随主相机视野；其余情况退化为屏幕像素空间。
+     * 多 Area2D 仍然只跟随第一个有 mainCamera 的 area，配合 layer 查询（不区分 area2d）。
      */
     private _updateScreen() {
-        // if (this._scene._area2Ds.size > 0) {
-        //     let xL = 10000000;
-        //     let xR = -10000000;
-        //     let yB = 10000000;
-        //     let yT = -10000000;
-        // TODO::因为现在sprite 找灯光数据只是layer查找，还要区分 area2d ，暂时先做全局。可以尝试设置个对应的 Area2D GlobalShaderData.
-        //     for (let i = 0 , n = this._lights.length; i < n; i++) {
-        //         let sprite = this._lights[i].owner;
-        //         if (sprite) { 
-        //             let renderData = sprite._struct.globalRenderData;
-        //             // 相机
-        //             let cameraRect = renderData ? renderData.cullRect : null;
-        //             if (cameraRect) {
-        //                 xL = Math.min(xL, cameraRect.x);
-        //                 xR = Math.max(xR, cameraRect.y);
-        //                 yB = Math.min(yB, cameraRect.z);
-        //                 yT = Math.max(yT, cameraRect.w);
-        //             } else {
-        //                 xR = -1 , yT = -1;
-        //                 break;
-        //             }
-        //         }else{
-        //             xR = -1 , yT = -1;
-        //             break;
-        //         }
-        //     }
-        //     this._screen.x = xL;
-        //     this._screen.y = yB;
-        //     this._screen.width = xR - xL;
-        //     this._screen.height = yT - yB;
-        //     if (this._screen.width < 0 || this._screen.height < 0) {
-        //         this._screen.x = 0;
-        //         this._screen.y = 0;
-        //         this._screen.width = RenderState2D.width | 0;
-        //         this._screen.height = RenderState2D.height | 0;
-        //     }
-        // } else {
+        //_rect 由 Area2D 渲染路径每帧调用 mainCamera._getCameraTransform() 时刷新（Area2D.ts:107、161），
+        //这里只读不触发，避免与 positionSmooth 平滑插值产生双步进。首帧 _rect=(0,0,0,0) 会因 r.y>r.x 检查失败而退化到屏幕空间。
+        let cameraRect: Vector4 = null;
+        if (this._scene && this._scene._area2Ds && this._scene._area2Ds.size > 0) {
+            for (const area of this._scene._area2Ds) {
+                const cam = area.mainCamera;
+                if (cam) {
+                    const r = cam._rect;
+                    //_rect = (min_x, max_x, min_y, max_y)
+                    if (r && r.y > r.x && r.w > r.z) {
+                        cameraRect = r;
+                        break; //只跟随第一个有效相机；多 Area2D 多相机场景需在 sprite 端按 area2d 区分光影 RT，超出本次改动范围
+                    }
+                }
+            }
+        }
+        if (cameraRect) {
+            this._screen.x = cameraRect.x | 0;
+            this._screen.y = cameraRect.z | 0;
+            this._screen.width = (cameraRect.y - cameraRect.x) | 0;
+            this._screen.height = (cameraRect.w - cameraRect.z) | 0;
+        } else {
             this._screen.x = 0;
             this._screen.y = 0;
             this._screen.width = RenderState2D.width | 0;
             this._screen.height = RenderState2D.height | 0;
-        // }
+        }
 
         if (this._screen.width <= 0 || this._screen.height <= 0)
             return false; //屏幕尺寸不合理

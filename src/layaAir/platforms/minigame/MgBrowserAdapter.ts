@@ -6,6 +6,7 @@ import { Loader } from "../../laya/net/Loader";
 import { BrowserAdapter } from "../../laya/platform/BrowserAdapter";
 import { PAL } from "../../laya/platform/PlatformAdapters";
 import { WebGLEngine } from "../../laya/RenderDriver/WebGLDriver/RenderDevice/WebGLEngine";
+import { RenderCapable } from "../../laya/RenderEngine/RenderEnum/RenderCapable";
 import { Browser } from "../../laya/utils/Browser";
 import { Utils } from "../../laya/utils/Utils";
 import { WasmAdapter } from "../../laya/utils/WasmAdapter";
@@ -73,38 +74,38 @@ export class MgBrowserAdapter extends BrowserAdapter {
         const systemVersionArr = system ? system.split(' ') : [];
         Browser.systemVersion = systemVersionArr.length ? systemVersionArr[systemVersionArr.length - 1] : '';
 
-        /*
-         这个是原来的isWan1Wan标志的逻辑
-         1. 微信下玩一玩平台，不支持imagedata,所以是黑屏的，设置这个标志，采用canvas模式
-         2. 其他平台也遇到这种问题，wan1wan标志就不再专指玩一玩了
-         3. 微信支持imagedata了，关闭这个标记
-         4. 发现虽然支持，但是有的手机会有文字黑边无法解决，再次打开
-        */
-        TextRenderConfig.useImageData = false;
-        //这里还有个对特定ios版本允许使用imageData的判断，已不清楚为什么
-        if (Browser.platform === Browser.PLATFORM_IOS && Utils.compareVersion(Browser.systemVersion, "10.1.1") === 0)
-            TextRenderConfig.useImageData = true;
-
-        if (Browser.onHWMiniGame && !WebGLEngine) {
-            TextRenderConfig.useImageData = true;
-        }
-
         if (Browser.onHWMiniGame) {
             this._pixelRatio = 1;
         }
+        else {
+            //常见于小游戏在PC真机跑，低dpr会导致画面模糊，强制取2
+            if (this._pixelRatio === 1 && Browser.onPC && !Browser.onDevTools)
+                this._pixelRatio = 2;
+        }
 
-        PAL.g.onShow(() => {
+        PAL.g.onShow && PAL.g.onShow(() => {
             this._visible = true;
             this.event(Event.VISIBILITY_CHANGE, true);
             this.event(Event.FOCUS);
         });
-        PAL.g.onHide(() => {
+        PAL.g.onHide && PAL.g.onHide(() => {
             this._visible = false;
             this.event(Event.VISIBILITY_CHANGE, false);
             this.event(Event.BLUR);
         });
         if (PAL.hasAPI("onWindowResize")) {
             PAL.g.onWindowResize(result => {
+                //旋转、分屏、PC拖窗、折叠屏等场景下窗口变化但屏幕不变，用屏幕尺寸会导致画布与实际显示区不匹配而被拉伸/剪裁。
+                let info = PAL.hasAPI("getWindowInfo") ? PAL.g.getWindowInfo()
+                    : (PAL.hasAPI("getSystemInfoSync") ? PAL.g.getSystemInfoSync() : null);
+                //回调参数优先，其次查询接口
+                let w = result ? result.windowWidth : 0;
+                let h = result ? result.windowHeight : 0;
+                if ((!w || !h) && info) { w = info.windowWidth; h = info.windowHeight; }
+                if (w && h) {
+                    window.innerWidth = w;
+                    window.innerHeight = h;
+                }
                 this.event(Event.RESIZE);
             });
         }
@@ -112,7 +113,7 @@ export class MgBrowserAdapter extends BrowserAdapter {
 
     start(): Promise<void> {
         let downloader = Loader.downloader = new MgDownloader(
-            PAL.hasAPI("getFileSystemManager") && PAL.hasAPI(PAL.g.getFileSystemManager(), "writeFile")
+            PAL.hasAPI("getFileSystemManager") && PAL.hasAPI(PAL.g.getFileSystemManager(), "writeFile") && PAL.hasAPI(PAL.g.getFileSystemManager(), "readdir")
         );
         this.setupWasmSupport();
 
@@ -125,9 +126,16 @@ export class MgBrowserAdapter extends BrowserAdapter {
     }
 
     onInitRender(): void {
-        if (Browser.onAlipayMiniGame || Browser.onTBMiniGame) {
+        if (Browser.onTBMiniGame) {
             // srgb问题
             (LayaGL.renderEngine as WebGLEngine)._supportCapatable.turnOffSRGB();
+        }
+
+        if (Browser.onAlipayMiniGame) {
+            // webgl1 + srgb + teximage2d接口，alipay安卓端绘制黑屏，关闭srgb
+            (LayaGL.renderEngine as WebGLEngine)._supportCapatable.turnOffSRGB();
+            // webgl2下默认有srgb，但是srgb配合msaa超采样有问题，这里关闭msaa
+            (LayaGL.renderEngine as WebGLEngine)._supportCapatable.turnOffCapableAndExtension(RenderCapable.MSAA, null);
         }
 
         if (Browser.onTBMiniGame) {
@@ -157,8 +165,13 @@ export class MgBrowserAdapter extends BrowserAdapter {
             wasmGlobal = (window as any).qg;
 
         if (wasmGlobal) {
-            if (!window.WebAssembly) //让WASM库以为支持WASM
-                (window as any).WebAssembly = {};
+            if (!window.WebAssembly) { //让WASM库以为支持WASM
+                try {
+                    (window as any).WebAssembly = { Memory: wasmGlobal.Memory };
+                } catch (e) {
+                    //抖音iOS等平台window.WebAssembly虽undefined但slot只读，赋值会抛错；wasm库走WasmAdapter钩子不依赖此stub，忽略
+                }
+            }
             WasmAdapter.Memory = wasmGlobal.Memory;
 
             WasmAdapter.instantiateWasm = (wasmFile: string, imports: any) => {
@@ -198,25 +211,55 @@ export class MgBrowserAdapter extends BrowserAdapter {
     }
 
     createMainCanvas(): HTMLCanvasElement {
+        let canvas: HTMLCanvasElement;
         if (Browser.onTBMiniGame) {
-            return (window as any).screencanvas //taobao mini
+            canvas = (window as any).screencanvas //taobao mini
                 || (window as any).canvas.getRealCanvas(); //taobao app/plugin
         }
-        else
-            return (window as any).canvas || (window as any).__canvas; //vivo/oppo
+        else {
+            canvas = (window as any).canvas || (window as any).__canvas; //vivo/oppo
+        }
+        canvas.id = "layaCanvas";
+        return canvas;
     }
 
     createElement<K extends keyof HTMLElementTagNameMap>(tagName: K): HTMLElementTagNameMap[K] {
         let ele: any;
-        if (tagName === "canvas" && typeof (PAL.g.createCanvas) === "function")
-            ele = PAL.g.createCanvas();
-        else
+        if (tagName === "canvas" && typeof (PAL.g.createCanvas) === "function") {
+            if (Browser.onTBMiniGame && (window as any).__NOT_TBMINIGAME__) {
+                ele = (window as any).canvas.getRealCanvas();   // taobao app/plugin canvas get.
+            } else {
+                ele = PAL.g.createCanvas();
+            }
+        }
+        else {
             ele = super.createElement(tagName);
+        }
         if (!ele.style)
             ele.style = {};
         else if (ele.style === (window as any).canvas?.style) //douyin共享了style对象
             ele.style = {};
         return ele;
+    }
+
+    getElementById(id: string): HTMLElement {
+        if (window.document.getElementById) {
+            return window.document.getElementById(id);
+        } else {
+            PAL.warnIncompatibility("getElementById");
+            return null;
+        }
+    }
+
+    removeElement(ele: HTMLElement): void {
+        if (ele.remove) {
+            ele.remove();
+        } else if ((ele as any).dispose) {
+            // ttMiniGame
+            (ele as any).dispose();
+        } else {
+            ele = null;
+        }
     }
 
     setCursor(cursor: string): void {

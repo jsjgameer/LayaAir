@@ -6,6 +6,7 @@ import { BlendType } from "../../RenderEngine/RenderEnum/BlendType";
 import { CompareFunction } from "../../RenderEngine/RenderEnum/CompareFunction";
 import { CullMode } from "../../RenderEngine/RenderEnum/CullMode";
 import { StencilOperation } from "../../RenderEngine/RenderEnum/StencilOperation";
+import { Vector3 } from "../../maths/Vector3";
 import { URL } from "../../net/URL";
 import { IncludeFile } from "./IncludeFile";
 import { ShaderNode } from "./ShaderNode";
@@ -16,6 +17,12 @@ export interface IShaderCompiledObj {
     includeNames: Set<string>;
     defs: Set<string>;
 };
+
+export interface IComputeShaderCompileObj {
+    node: ShaderNode;
+    includeNames: Set<string>;
+    defs: Set<string>;
+}
 
 type IncludeItem = { name: string, node: ShaderNode, codeName: string, file: IncludeFile };
 
@@ -154,10 +161,48 @@ export class ShaderCompile {
         ShaderCompile._compileToTree(result.vsNode, vs, result.defs, includes, basePath);
         ShaderCompile._compileToTree(result.psNode, ps, result.defs, includes, basePath);
 
-        return this._loadIncludesDeep(result, includes, 0);
+        return this._loadIncludesDeep(result, includes, 0) as Promise<IShaderCompiledObj>;
     }
 
-    private static _loadIncludesDeep(result: IShaderCompiledObj, includes: Array<IncludeItem>, index: number): Promise<IShaderCompiledObj> {
+    static compileCompute(code: string, basePath?: string): IComputeShaderCompileObj {
+        let result: IComputeShaderCompileObj = {
+            node: new ShaderNode([]),
+            includeNames: new Set(),
+            defs: new Set()
+        };
+
+        let includes: Array<IncludeItem> = [];
+
+        code = code.replace(_clearCR, "");
+
+        ShaderCompile._compileToTree(result.node, code, result.defs, includes, basePath);
+
+        for (let inc of includes) {
+            if (inc.file)
+                result.includeNames.add(inc.name);
+            else
+                console.warn(`ShaderCompile missing file ${inc.name}`);
+        }
+
+        return result;
+    }
+
+    static compileComputeAsync(code: string, basePath?: string): Promise<IComputeShaderCompileObj> {
+        let result: IComputeShaderCompileObj = {
+            node: new ShaderNode([]),
+            includeNames: new Set(),
+            defs: new Set()
+        };
+        let includes: Array<IncludeItem> = [];
+
+        code = code.replace(_clearCR, "");
+
+        ShaderCompile._compileToTree(result.node, code, result.defs, includes, basePath);
+
+        return this._loadIncludesDeep(result, includes, 0) as Promise<IComputeShaderCompileObj>;
+    }
+
+    private static _loadIncludesDeep(result: IShaderCompiledObj | IComputeShaderCompileObj, includes: Array<IncludeItem>, index: number): Promise<IShaderCompiledObj | IComputeShaderCompileObj> {
         let toLoad: Array<IncludeItem>;
         let includesCnt = includes.length;
         for (let i = index; i < includesCnt; i++) {
@@ -392,9 +437,12 @@ export class ShaderCompile {
         let stencilFail = stencilOp ? stencilOp[0] : null;
         let stencilZFail = stencilOp ? stencilOp[1] : null;
         let stencilZPass = stencilOp ? stencilOp[2] : null;
-        renderState.stencilOp.x = StencilOperationMap[stencilFail];
-        renderState.stencilOp.y = StencilOperationMap[stencilZFail];
-        renderState.stencilOp.z = StencilOperationMap[stencilZPass];
+
+        let tempVec = renderState.stencilOp;
+        tempVec.x = StencilOperationMap[stencilFail];
+        tempVec.y = StencilOperationMap[stencilZFail];
+        tempVec.z = StencilOperationMap[stencilZPass];
+        renderState.stencilOp = tempVec;
         renderState.depthBias = <boolean>obj.depthBias;
         renderState.depthBiasConstant = <number>obj.depthBiasConstant;
         renderState.depthBiasSlopeScale = <number>obj.depthBiasSlopeScale;

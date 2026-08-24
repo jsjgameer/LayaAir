@@ -12,6 +12,8 @@ export abstract class WebGLUniformBufferBase {
 
     needUpload: boolean;
 
+    destroyed: boolean = false;
+
     abstract upload(): void;
 
     abstract bind(location: number): void;
@@ -180,6 +182,7 @@ export abstract class WebGLUniformBufferBase {
                         this.setVector3(index, data as Vector3);
                     }
                     break;
+                case ShaderDataType.Vector4u:
                 case ShaderDataType.Vector4:
                 case ShaderDataType.Color:
                     if (uniform.arrayLength > 0) {

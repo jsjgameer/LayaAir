@@ -10,9 +10,13 @@ import { Const } from "../../../../Const";
 import { WebRender2DDataHandle } from "./WebRenderDataHandle";
 import { BlendMode, BlendModeHandler } from "../../../../webgl/canvas/BlendMode";
 import { I2DGlobalRenderData } from "../../Design/2D/IRender2DDataHandle";
-import { Stat } from "../../../../utils/Stat";
 import { ShaderDefines2D } from "../../../../webgl/shader/d2/ShaderDefines2D";
 import { Sprite } from "../../../../display/Sprite";
+import { Transform2DStore } from "../../../../display/transform2d/Transform2DStore";
+import { SlotConst } from "../../../../display/transform2d/Transform2DLayout";
+
+/** @internal 读 store world 矩阵的模块级 scratch(无 per-call 分配) */
+const _wm6 = new Float32Array(6);
 
 const _DefaultClipInfo: IClipInfo = {
    clipMatrix: new Matrix(),
@@ -32,17 +36,13 @@ enum ChildrenUpdateType {
    None = 0,
    Clip = 1,
    Blend = 2,
-   Alpha = 4,
+   Alpha = 4,// 死位：alpha 已由 _setAlphaBase + SoA 接管，updateChildren 不再传播；结构变更须配套调用 _setAlphaBase
    Pass = 8,
    Global = 16,
    Culling = 32,
    DcOptimize = 64,
 }
 
-interface StructTransform {
-   matrix: Matrix;
-   modifiedFrame: number;
-}
 
 type ParentData = {
    clipInfo: IClipInfo;
@@ -51,7 +51,6 @@ type ParentData = {
    pass: WebRender2DPass;
    enableCulling: boolean;
    dcOptimize: boolean;
-   globalAlpha: number;
 }
 
 const _DefaultParentData: ParentData = {
@@ -61,11 +60,13 @@ const _DefaultParentData: ParentData = {
    pass: null,
    enableCulling: false,
    dcOptimize: false,
-   globalAlpha: 1,
 }
 
 export class WebRenderStruct2D implements IRenderStruct2D {
    owner: Sprite;
+
+   /** 手动渲染模式：子节点不参与父 pass 的自动遍历和渲染 */
+   manualRender: boolean = false;
 
    /** @internal 原始数据，修改操作时修改这个 */
    _parentData: ParentData = {
@@ -130,41 +131,84 @@ export class WebRenderStruct2D implements IRenderStruct2D {
 
    dcOptimizeEnd: WebRenderStruct2D;
 
+   /**
+    * @zh 本节点在 Transform2DStore(SoA) 中的 slot。渲染底层据此直接按 slot 取 world 矩阵，
+    * 不再经 SpriteGlobalTransform 那一层。由 Sprite 在构造/创建 subStruct 时写入。
+    */
+   transSlot: number = SlotConst.None;
+
+   /** @internal getter 每帧从 store 填一次的临时矩阵；非权威存储，权威在 Transform2DStore。 */
+   private _renderMatrix: Matrix = new Matrix();
+   /** @internal renderMatrix 每帧从 store 读一次的缓存帧标记 */
+   private _rmFrame: number = -1;
+
    public get renderMatrix(): Matrix {
-      return this.trans.matrix;
+      // Web struct 只把 transSlot 当身份：矩阵按 slot 从 Transform2DStore 读，缓存 key 用 SoA 的 matrixFrame
+      // (不是 Stat.loopCount)——否则同帧 update() 前先读过一次后，update() 改了矩阵也不会刷新、拿旧值。
+      if (this.transSlot >= 0) {
+         const store = Transform2DStore.instance;
+         if (store.dirtyM) {
+            // 本帧尚有未结账的矩阵写入：matrixFrame 还没盖准，直接现算并使缓存失效(update 后会重读)。
+            store.computeWorldMatrix(this.transSlot, _wm6);
+            this._rmFrame = -1;
+         } else {
+            // 已结账：只有 world 矩阵真变(matrixFrame 变)才刷新本地 Matrix。
+            const matFrame = store.getMatrixFrame(this.transSlot);
+            if (this._rmFrame === matFrame)
+               return this._renderMatrix;
+            this._rmFrame = matFrame;
+            store.readWorldMatrix(this.transSlot, _wm6);
+         }
+         const m = this._renderMatrix;
+         m.a = _wm6[0]; m.b = _wm6[1]; m.c = _wm6[2]; m.d = _wm6[3]; m.tx = _wm6[4]; m.ty = _wm6[5];
+         m._checkTransform();
+      }
+      return this._renderMatrix;
    }
 
    public set renderMatrix(value: Matrix) {
-      if (this.trans) {
-         this.trans.matrix = value;
-         this.trans.modifiedFrame = Stat.loopCount;
-      }
-      else {
-         //da buffer 的位置   abcd dx dy modify
-         this.trans = { matrix: value, modifiedFrame: Stat.loopCount };
+      // Web struct 的矩阵权威在 Transform2DStore(getter 读)，setter 不再存。
+      // 仅无 slot 的旧路径(理论上不出现在 Web)才把外部矩阵临时拷入并使缓存失效。
+      if (this.transSlot < 0) {
+         value.copyTo(this._renderMatrix);
+         this._rmFrame = -1;
       }
    }
 
-   trans: StructTransform;
+   /**
+    * @zh cache 隔离基准 slot：本 struct alpha 相对该 cache 根隔离(None=无 cache 祖先/主 pass)。
+    * 仅在树结构 / cacheAs / mask 变化时更新(_setAlphaBase)，不随 alpha 写入变化。
+    */
+   _alphaBaseSlot: number = SlotConst.None;
+   /** @internal _handleInterData 上次写入 UNIFORM_VERTALPHA 的值；值比较门控，无变化不重传。 */
+   private _lastUploadedAlpha: number = -1;
 
+   /**
+    * @zh 全局(级联) alpha：base<0 直读 worldAlpha(slot)；cache 子树取相对 base 的相对 alpha。
+    * 与旧 _currentData.globalAlpha 逐场景等价(普通/cache 内容/合成/嵌套/mask)。
+    */
    public get globalAlpha(): number {
-      return this._currentData.globalAlpha;
+      const slot = this.transSlot;
+      if (slot < 0) return 1; // 无 SoA 节点的临时 struct(line/debug draw)兜底
+      const store = Transform2DStore.instance;
+      let base = this._alphaBaseSlot;
+      // 遮罩合成 quad：K 的 SoA 父=maskParent M，worldAlpha(K) 含 worldAlpha(M)；以 M 为 base 除掉它只取 localAlpha(K)
+      // (M 的 alpha 在其 RT 合成时另施加，否则重复变暗≈alpha²)。owner._maskParent 排除普通 sprite 手设 blendMode="mask"。
+      if (this._blendMode === BlendMode.mask && this.owner && this.owner._maskParent) {
+         base = store.getParent(slot);
+      }
+      if (base < 0)
+         return store.dirtyA ? store.computeWorldAlpha(slot) : store.getWorldAlpha(slot);
+      return store.getRelativeWorldAlpha(slot, base, store.dirtyA);
    }
-
-   public set globalAlpha(value: number) {
-      this._parentData.globalAlpha = value;
-   }
-
-   private _alpha: number = 1.0;
 
    public get alpha(): number {
-      return this._alpha;
+      // local alpha 直接来自 SoA(slot)，struct 不另存一份。无 slot 的临时 struct(line/debug)兜底 1。
+      return this.transSlot < 0 ? 1 : Transform2DStore.instance.readAlpha(this.transSlot);
    }
 
    public set alpha(value: number) {
-      this._alpha = value;
-      this._updateGlobalAlpha(value , this.parent ? this.parent.globalAlpha : 1);
-      this.updateChildren(ChildrenUpdateType.Alpha);
+      if (this.transSlot >= 0) Transform2DStore.instance.writeAlpha(this.transSlot, value);
    }
 
    /** @internal 最特殊，需要最后一个处理混合 */
@@ -183,9 +227,6 @@ export class WebRenderStruct2D implements IRenderStruct2D {
    /** @internal */
    needUploadClip = -1;
 
-   /** @internal */
-   needUploadAlpha = true;
-
    /** 是否启动 */
    enabled: boolean = true;
 
@@ -203,6 +244,9 @@ export class WebRenderStruct2D implements IRenderStruct2D {
    }
 
    public set renderDataHandler(value: WebRender2DDataHandle) {
+      if (this._renderDataHandler) {
+         this._renderDataHandler.owner = null;
+      }
       this._renderDataHandler = value;
       if (value)
          this._renderDataHandler.owner = this;
@@ -284,6 +328,8 @@ export class WebRenderStruct2D implements IRenderStruct2D {
       //不存在上一个
       if (value != this._subStruct) {
          let updateFlag = 0;
+         const prevContentBase = this._alphaBaseSlot; // 成为 cache 根前的外层 base
+         let restoreBase = SlotConst.None;
 
          if (value) {
             let parentData = this._parentData;
@@ -291,10 +337,6 @@ export class WebRenderStruct2D implements IRenderStruct2D {
             value._blendMode = this._blendMode;
             value._currentData = parentData;
             value._maskParentPass = this._maskParentPass;
-            
-            if (parentData.globalAlpha !== 1) {
-               updateFlag |= ChildrenUpdateType.Alpha;
-            }
 
             if (!this._globalRenderData && parentData.globalRenderData) {
                updateFlag |= ChildrenUpdateType.Global;
@@ -316,17 +358,14 @@ export class WebRenderStruct2D implements IRenderStruct2D {
          } else if (this._subStruct) {
 
             let parentData = this._parentData;
+            restoreBase = this._subStruct._alphaBaseSlot; // composite 保存的外层 base
             this._subStruct._currentData = this._subStruct._parentData;
             this._blendMode = this._subStruct._blendMode;
 
-            if (parentData.globalAlpha !== 1) {
-               updateFlag |= ChildrenUpdateType.Alpha;
-            }
-
-            if (!this._clipInfo && parentData.clipInfo) { 
+            if (!this._clipInfo && parentData.clipInfo) {
                updateFlag |= ChildrenUpdateType.Clip;
             }
-            
+
             if (!this._globalRenderData && parentData.globalRenderData) {
                updateFlag |= ChildrenUpdateType.Global;
             }
@@ -339,8 +378,20 @@ export class WebRenderStruct2D implements IRenderStruct2D {
             this._subStruct._maskParentPass = null;
             this._currentData = parentData;
          }
-         
+
          this._subStruct = value;
+
+         // alpha 隔离基准：启用→content 相对自己(报1)/composite 用外层 base/孩子相对自己；解除→回退外层 base。
+         if (value) {
+            value._alphaBaseSlot = prevContentBase;
+            this._alphaBaseSlot = this.transSlot;
+            for (let i = 0, n = this.children.length; i < n; i++) {
+               this.children[i]._setAlphaBase(this.transSlot);
+            }
+         } else {
+            this._setAlphaBase(restoreBase);
+         }
+
          this._updateGlobalShaderData();
          this.updateChildren(updateFlag);
          this._setBlendMode();
@@ -355,6 +406,7 @@ export class WebRenderStruct2D implements IRenderStruct2D {
    /** @internal */
    _clipInfo: IClipInfo = null;
 
+   private _uniformClip = false;
    /**@deprecated 使用_currentData.clipInfo代替 */
    get _parentClipInfo(): IClipInfo {
       return this._currentData.clipInfo;
@@ -374,15 +426,18 @@ export class WebRenderStruct2D implements IRenderStruct2D {
 
       if (rect) {
          let info = this._clipInfo;
-         let trans = this.trans;
+         // 矩阵与变更帧号按 slot 直接问 Transform2DStore(不再依赖 struct 自存的 trans)。
+         let matFrame = this.transSlot >= 0 ? Transform2DStore.instance.getMatrixFrame(this.transSlot) : 0;
          let clipInfo = this._currentData.clipInfo;
          let parentClipUpdateFrame = clipInfo && clipInfo !== _DefaultClipInfo ? clipInfo._updateFrame : -1;
 
-         if (trans) {
-            if (info._updateFrame < trans.modifiedFrame || info._updateFrame < parentClipUpdateFrame) {
-               let mat = trans.matrix;
+         if (this.transSlot >= 0) {
+            if (info._updateFrame < matFrame || info._updateFrame < parentClipUpdateFrame) {
+               let mat = this.renderMatrix;
                let cm = info.clipMatrix;
                let { x, y, width, height } = rect;
+               width = Math.max(width, 0.0001);
+               height = Math.max(height, 0.0001);
                let tx = mat.tx, ty = mat.ty;
                cm.tx = x * mat.a + y * mat.c + tx;
                cm.ty = x * mat.b + y * mat.d + ty;
@@ -396,39 +451,101 @@ export class WebRenderStruct2D implements IRenderStruct2D {
                   let parentClipPos = clipInfo.clipMatPos;
                   let offsetx = parentClipPos.z - parentClipPos.x;
                   let offsety = parentClipPos.w - parentClipPos.y;
+                  let parentMat = clipInfo.clipMatrix;
+                  // 旋转/翻转判定：只要任一方 b/c 不为 0 就走世界 AABB 通用分支
+                  let pmRot = parentMat.b !== 0 || parentMat.c !== 0;
+                  let cmRot = cm.b !== 0 || cm.c !== 0;
                   //计算交集
-                  if (cm.a > 0 && cm.d > 0) {
-                     let parentMat = clipInfo.clipMatrix;
-                     let parentMinX = parentMat.tx;
-                     let parentMinY = parentMat.ty;
-                     let parentMaxX = parentMinX + parentMat.a;
-                     let parentMaxY = parentMinY + parentMat.d;
+                  if (!pmRot && !cmRot) {
+                     // —— 快速路径：轴对齐场景，与旧实现行为完全一致 ——
+                     if (cm.a > 0 && cm.d > 0) {
+                        let parentMinX = parentMat.tx;
+                        let parentMinY = parentMat.ty;
+                        let parentMaxX = parentMinX + parentMat.a;
+                        let parentMaxY = parentMinY + parentMat.d;
 
-                     let cmaxx = tx + cm.a;
-                     let cmaxy = ty + cm.d;
+                        let cmaxx = tx + cm.a;
+                        let cmaxy = ty + cm.d;
+                        if (cmaxx <= parentMinX || cmaxy <= parentMinY || tx >= parentMaxX || ty >= parentMaxY) {
+                           //超出范围了
+                           cm.a = -0.1; cm.d = -0.1;
+                        } else {
+                           if (tx < parentMinX) {
+                              cm.a -= (parentMinX - tx);
+                              tx = parentMinX;
+                           }
+                           if (cmaxx > parentMaxX) {
+                              cm.a -= (cmaxx - parentMaxX);
+                           }
+                           if (ty < parentMinY) {
+                              cm.d -= (parentMinY - ty);
+                              ty = parentMinY;
+                           }
+                           if (cmaxy > parentMaxY) {
+                              cm.d -= (cmaxy - parentMaxY);
+                           }
+                           if (cm.a <= 0) cm.a = -0.1;
+                           if (cm.d <= 0) cm.d = -0.1;
 
-                     if (cmaxx <= parentMinX || cmaxy <= parentMinY || tx >= parentMaxX || ty >= parentMaxY) {
-                        //超出范围了
-                        cm.a = -0.1; cm.d = -0.1;
+                           if (cm.tx < parentMinX) {
+                              cm.tx = parentMinX;
+                           }
+                           if (cm.ty < parentMinY) {
+                              cm.ty = parentMinY;
+                           }
+                        }
+                     }
+                  } else {
+                     // —— 旋转分支：在父 clip 的局部空间里求交 ——
+                     // 父 clip 的局部空间里它本身是 [0,1]×[0,1] 的单位方块。
+                     // 把子 clip 4 个角变到父局部坐标系，取 AABB 后与 [0,1]² 求交，
+                     // 再用父矩阵变回世界。这样：
+                     //   - 子和父同向（典型情况：子无自旋转，仅继承祖先）→ 子在父局部就是轴对齐，AABB = 真实矩形，零损失。
+                     //   - 子在父基础上有额外旋转 → AABB 是近似，但结果仍沿父方向，远比世界 AABB 紧。
+                     let det = parentMat.a * parentMat.d - parentMat.b * parentMat.c;
+                     if (det === 0) {
+                        // 父矩阵退化（例如缩放为 0），无法反求局部坐标，整体裁掉
+                        cm.a = -0.1; cm.b = 0; cm.c = 0; cm.d = -0.1;
                      } else {
-                        if (tx < parentMinX) {
-                           cm.a -= (parentMinX - tx);
-                           tx = cm.tx = parentMinX;
-                           // offsetx += parentMinX - cm.tx;
+                        let invDet = 1 / det;
+                        // 世界向量 (dx,dy) → 父 clip 局部向量 (du,dv)
+                        // 由 [a c][u]   [dx]   解得：u = ( d*dx - c*dy)/det
+                        //    [b d][v] = [dy]      v = (-b*dx + a*dy)/det
+                        let dx0 = cm.tx - parentMat.tx, dy0 = cm.ty - parentMat.ty;
+                        let u0 = ( parentMat.d * dx0 - parentMat.c * dy0) * invDet;
+                        let v0 = (-parentMat.b * dx0 + parentMat.a * dy0) * invDet;
+                        // 子的两个基底在父局部
+                        let du1 = ( parentMat.d * cm.a - parentMat.c * cm.b) * invDet;
+                        let dv1 = (-parentMat.b * cm.a + parentMat.a * cm.b) * invDet;
+                        let du2 = ( parentMat.d * cm.c - parentMat.c * cm.d) * invDet;
+                        let dv2 = (-parentMat.b * cm.c + parentMat.a * cm.d) * invDet;
+                        // 子 4 个角的父局部 AABB（用正负分摊）
+                        let du1N = du1 < 0 ? du1 : 0, du1P = du1 > 0 ? du1 : 0;
+                        let du2N = du2 < 0 ? du2 : 0, du2P = du2 > 0 ? du2 : 0;
+                        let dv1N = dv1 < 0 ? dv1 : 0, dv1P = dv1 > 0 ? dv1 : 0;
+                        let dv2N = dv2 < 0 ? dv2 : 0, dv2P = dv2 > 0 ? dv2 : 0;
+                        let cMinU = u0 + du1N + du2N, cMaxU = u0 + du1P + du2P;
+                        let cMinV = v0 + dv1N + dv2N, cMaxV = v0 + dv1P + dv2P;
+
+                        // 与父单位方块 [0,1]² 求交
+                        let iu0 = cMinU > 0 ? cMinU : 0;
+                        let iv0 = cMinV > 0 ? cMinV : 0;
+                        let iu1 = cMaxU < 1 ? cMaxU : 1;
+                        let iv1 = cMaxV < 1 ? cMaxV : 1;
+
+                        if (iu0 >= iu1 || iv0 >= iv1) {
+                           cm.a = -0.1; cm.b = 0; cm.c = 0; cm.d = -0.1;
+                        } else {
+                           let du = iu1 - iu0, dv = iv1 - iv0;
+                           // 用父矩阵把局部矩形变回世界，结果保留父方向旋转
+                           cm.tx = parentMat.tx + iu0 * parentMat.a + iv0 * parentMat.c;
+                           cm.ty = parentMat.ty + iu0 * parentMat.b + iv0 * parentMat.d;
+                           cm.a  = du * parentMat.a;
+                           cm.b  = du * parentMat.b;
+                           cm.c  = dv * parentMat.c;
+                           cm.d  = dv * parentMat.d;
+                           tx = cm.tx; ty = cm.ty;
                         }
-                        if (cmaxx > parentMaxX) {
-                           cm.a -= (cmaxx - parentMaxX);
-                        }
-                        if (ty < parentMinY) {
-                           cm.d -= (parentMinY - ty);
-                           ty = cm.ty = parentMinY;
-                           // offsety += parentMinY - cm.ty;
-                        }
-                        if (cmaxy > parentMaxY) {
-                           cm.d -= (cmaxy - parentMaxY);
-                        }
-                        if (cm.a <= 0) cm.a = -0.1;
-                        if (cm.d <= 0) cm.d = -0.1;
                      }
                   }
 
@@ -438,7 +555,7 @@ export class WebRenderStruct2D implements IRenderStruct2D {
                info.clipMatDir.setValue(cm.a, cm.b, cm.c, cm.d);
                info.clipMatPos.setValue(cm.tx, cm.ty, tx, ty);
 
-               info._updateFrame = Math.max(trans.modifiedFrame, parentClipUpdateFrame);
+               info._updateFrame = Math.max(matFrame, parentClipUpdateFrame);
             }
          }
       }
@@ -448,16 +565,28 @@ export class WebRenderStruct2D implements IRenderStruct2D {
          let data = this.spriteShaderData;
          // clip
          let info = this.getClipInfo();
-         if (this.needUploadClip < info._updateFrame) {
-            data.setVector(ShaderDefines2D.UNIFORM_CLIPMATDIR, info.clipMatDir);
-            data.setVector(ShaderDefines2D.UNIFORM_CLIPMATPOS, info.clipMatPos);
-            this.needUploadClip = info._updateFrame;
+         if (info !== _DefaultClipInfo) {
+            if (this.needUploadClip < info._updateFrame) {
+               data.setVector(ShaderDefines2D.UNIFORM_CLIPMATDIR, info.clipMatDir);
+               data.setVector(ShaderDefines2D.UNIFORM_CLIPMATPOS, info.clipMatPos);
+               this.needUploadClip = info._updateFrame;
+            }
+
+            if (!this._uniformClip) {
+               this._uniformClip = true;
+               data.addDefine(ShaderDefines2D.UNIFORMCLIP);
+            }
+            
+         }else if (this._uniformClip) {
+            data.removeDefine(ShaderDefines2D.UNIFORMCLIP);
+            this._uniformClip = false;
          }
 
-         // global alpha
-         if (this.needUploadAlpha) {
-            data.setNumber(ShaderDefines2D.UNIFORM_VERTALPHA, this.globalAlpha);
-            this.needUploadAlpha = false;
+         // global alpha：按 slot 直读 store 的(隔离)worldAlpha，值变才重传 UNIFORM_VERTALPHA。
+         let ga = this.globalAlpha;
+         if (this._lastUploadedAlpha !== ga) {
+            data.setNumber(ShaderDefines2D.UNIFORM_VERTALPHA, ga);
+            this._lastUploadedAlpha = ga;
          }
       }
    }
@@ -490,14 +619,25 @@ export class WebRenderStruct2D implements IRenderStruct2D {
          this._clipInfo._updateFrame = -1;
    }
 
-   private _updateGlobalAlpha(value: number , parentAlpha: number = 1): void {
-      this._parentData.globalAlpha = parentAlpha * value;
-      // if (this._subStruct) {
-      //    this.globalAlpha = value;
-      //    this._subStruct.globalAlpha = parentAlpha;
-      // } else {
-      //    this.globalAlpha = parentAlpha * value;
-      // }
+   /** @zh 交给孩子的 alpha 隔离基准：cache 根→自身 slot；否则继承自身 base。 */
+   private _childAlphaBase(): number {
+      return this._subStruct ? this.transSlot : this._alphaBaseSlot;
+   }
+
+   /**
+    * @zh 传播 alpha 隔离基准(外层 cache 根 slot)，仅结构 / cacheAs / mask 变化时调用。
+    * cache 根：只更新 composite 基准，content/孩子相对自己隔离不受外层影响；普通节点：更新自身并向下传(未变剪枝)。
+    */
+   _setAlphaBase(outerBase: number): void {
+      if (this._subStruct) {
+         this._subStruct._alphaBaseSlot = outerBase;
+         return;
+      }
+      if (this._alphaBaseSlot === outerBase) return;
+      this._alphaBaseSlot = outerBase;
+      for (let i = 0, n = this.children.length; i < n; i++) {
+         this.children[i]._setAlphaBase(outerBase);
+      }
    }
 
    private _updateBlendMode(blendMode: BlendMode): void {
@@ -512,12 +652,17 @@ export class WebRenderStruct2D implements IRenderStruct2D {
       return this._clipInfo || this._currentData.clipInfo || _DefaultClipInfo;
    }
 
+   /** 是否存在有效裁剪（非默认值） */
+   hasClip(): boolean {
+      return this.getClipInfo() !== _DefaultClipInfo;
+   }
+
    private updateChildren(type: ChildrenUpdateType): void {
       if (type == ChildrenUpdateType.None) return;
-      let info: IClipInfo, blendMode: BlendMode, alpha: number;
+      let info: IClipInfo, blendMode: BlendMode;
       let priority: number = 0, pass: WebRender2DPass = null, enableCulling: boolean = false, dcOptimize: boolean = false;
       let globalShaderData: ShaderData = null, globalRenderData: WebGlobalRenderData = null;
-      let updateBlend = false, updateClip = false, updateAlpha = false, updatePass = false, updateGlobal = false, updateCulling = false, updateDcOptimize = false;
+      let updateBlend = false, updateClip = false, updatePass = false, updateGlobal = false, updateCulling = false, updateDcOptimize = false;
 
       if (type & ChildrenUpdateType.Clip) {
          info = this.getClipInfo();
@@ -531,15 +676,6 @@ export class WebRenderStruct2D implements IRenderStruct2D {
       if (type & ChildrenUpdateType.Blend) {
          blendMode = this.blendMode;
          updateBlend = true;
-      }
-
-      if (type & ChildrenUpdateType.Alpha) {
-         alpha = this.globalAlpha;
-         this.needUploadAlpha = true;
-         if (this._subStruct) {
-            this._subStruct.needUploadAlpha = true;
-         }
-         updateAlpha = true;
       }
 
       if (type & ChildrenUpdateType.Pass) {
@@ -580,11 +716,6 @@ export class WebRenderStruct2D implements IRenderStruct2D {
                child._setBlendMode();
                updateChild = true;
             }
-         }
-
-         if (updateAlpha) {
-            child._updateGlobalAlpha(child.alpha , alpha);
-            updateChild = true;
          }
 
          if (updatePass) {
@@ -639,7 +770,8 @@ export class WebRenderStruct2D implements IRenderStruct2D {
       let childParentData = child._parentData;
       childParentData.clipInfo = this.getClipInfo();
       childParentData.blendMode = this.blendMode;
-      child._updateGlobalAlpha(child.alpha , this.globalAlpha);
+      child._setBlendMode();
+      child._setAlphaBase(this._childAlphaBase());
       let parentPass = this.pass;
 
       childParentData.pass = parentPass;
@@ -677,7 +809,7 @@ export class WebRenderStruct2D implements IRenderStruct2D {
          child._updatePriority();
          childParentData.clipInfo = null;
          childParentData.blendMode = BlendMode.invalid;
-         child._updateGlobalAlpha(child._alpha);
+         child._setAlphaBase(SlotConst.None);
          childParentData.globalRenderData = null;
          child._updateGlobalShaderData();
          childParentData.enableCulling = false;
@@ -707,6 +839,6 @@ export class WebRenderStruct2D implements IRenderStruct2D {
       this.parent = null;
       this.children.length = 0;
       this.children = null;
-      this.pass = null;
+      this._pass = null;
    }
 }

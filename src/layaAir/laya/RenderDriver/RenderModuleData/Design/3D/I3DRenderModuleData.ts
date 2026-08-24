@@ -47,6 +47,10 @@ export interface IBaseRenderNode {
     receiveShadow: boolean;
     enable: boolean;
     renderbitFlag: number;
+    //裁剪范围
+    visibalRangeBit: number;
+    visibalMin: number;
+    visibalMax: number;
     layer: number;
     bounds: Bounds;
     baseGeometryBounds: Bounds;
@@ -62,6 +66,7 @@ export interface IBaseRenderNode {
     lightProbUpdateMark: number;
     irradientMode: IrradianceMode;
     ismoved: Vector2;
+    perCameraUpdate: boolean;
     set_renderUpdatePreCall(call: any, fun: any): void;
     set_caculateBoundingBox(call: any, fun: any): void;
     /**
@@ -95,7 +100,6 @@ export interface IBaseRenderNode {
 }
 
 export interface IMeshRenderNode extends IBaseRenderNode {
-
 }
 
 export interface ISkinRenderNode extends IMeshRenderNode {

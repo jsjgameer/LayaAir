@@ -90,8 +90,8 @@ export class TileMapLayer extends BaseRenderNode2D {
     _cliper: RectClipper;
 
     private _layerColor: Color = new Color();
-
-    private _sortMode: TileLayerSortMode;
+    /** @internal */
+    _sortMode: TileLayerSortMode;
 
     private _renderTileSize: number = 32;
 
@@ -187,11 +187,14 @@ export class TileMapLayer extends BaseRenderNode2D {
         if (this._tileSet == value) {
             return;
         }
-        if (this._tileSet)
+        if (this._tileSet) { 
             this._tileSet._removeOwner(this);
+            this._tileSet._removeReference();
+        }
         this._tileSet = value;
         if (value) {
-            this.tileSet._addOwner(this);
+            this._tileSet._addOwner(this);
+            this._tileSet._addReference();
             this._initialTileSet();
         }
     }
@@ -244,7 +247,7 @@ export class TileMapLayer extends BaseRenderNode2D {
         this._cliper = new RectClipper();
         this._renderElements = [];
         this._materials = [];
-        this.sortMode = TileLayerSortMode.YSort;
+        this.sortMode = TileLayerSortMode.ZINDEXSORT;
     }
 
     protected _isMaterialVaild(value: Material): boolean {
@@ -323,7 +326,7 @@ export class TileMapLayer extends BaseRenderNode2D {
      */
     _updateMapDatas() {
         if (this._tileMapDatas == null || !this._tileMapDatas.length) { return; }
-        let chunks = TileMapDatasParse.read(this._tileMapDatas);
+        let chunks = TileMapDatasParse.read(this._tileMapDatas.buffer as ArrayBuffer);
         for (var i = 0, len = chunks.length; i < len; i++) {
             let data = new TileMapChunkData();
             data._tileLayer = this;
@@ -396,6 +399,7 @@ export class TileMapLayer extends BaseRenderNode2D {
         super.onDestroy();
         this._tileMapPhysics.destroy();
         this._tileMapOccluder.destroy();
+        this.tileSet = null;
     }
 
     _globalChangeHandler() {
@@ -580,6 +584,8 @@ export class TileMapLayer extends BaseRenderNode2D {
         //     chuckLocalRect.z + tileSize.x - chuckLocalRect.x + tileSize.x, 
         //     chuckLocalRect.w + tileSize.y - chuckLocalRect.y + tileSize.y, 
         // "#ff0000");
+
+        this._updateLight();
     }
 
     /**

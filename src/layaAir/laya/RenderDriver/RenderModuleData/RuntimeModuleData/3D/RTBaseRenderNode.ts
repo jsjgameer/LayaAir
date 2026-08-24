@@ -214,13 +214,54 @@ export class RTBaseRenderNode implements IBaseRenderNode {
         }
     }
 
+    public get perCameraUpdate(): boolean {
+        return this._nativeObj.perCameraUpdate;
+    }
+    public set perCameraUpdate(value: boolean) {
+        this._nativeObj.perCameraUpdate = value;
+    }
+
     constructor() {
         this._getNativeObj();
         this._defaultBaseGeometryBounds = new Bounds();
         this.baseGeometryBounds = this._defaultBaseGeometryBounds;
         this.renderelements = [];
     }
-    ismoved: Vector2 = new Vector2();//TODO Native
+
+    public get visibalRangeBit(): number {
+        return this._nativeObj.visibalRangeBit;
+    }
+
+    public set visibalRangeBit(value: number) {
+        this._nativeObj.visibalRangeBit = value;
+    }
+
+    public get visibalMin(): number {
+        return this._nativeObj.visibalMin;
+    }
+
+    public set visibalMin(value: number) {
+        this._nativeObj.visibalMin = value;
+    }
+
+    public get visibalMax(): number {
+        return this._nativeObj.visibalMax;
+    }
+
+    public set visibalMax(value: number) {
+        this._nativeObj.visibalMax = value;
+    }
+
+    public get ismoved(): Vector2 {
+        return this._ismoved;
+    }
+
+    public set ismoved(value: Vector2) {
+        this._ismoved.setValue(value.x, value.y);
+        this._nativeObj.ismoved = value;
+    }
+
+    private _ismoved: Vector2 = new Vector2();
 
     private _worldParams: Vector4 = new Vector4();
     setNodeCustomData(dataSlot: ENodeCustomData, data: number): void {

@@ -22,34 +22,41 @@ export class GradientDataNumber implements IClone {
         return gradientData;
     }
 
-    private _currentLength: number = 0;
-
     /**
-     * @internal
+     * @en The current length of the gradient data.
+     * @zh 渐变数据的当前长度。
      */
+    _currentLength: number = 0;
+
+    /** @internal */
     _dataBuffer: Float32Array;
 
     /**
-     * @internal
+     * @en The gradient elements.
+     * @zh 渐变元素。
      */
     get _elements(): Float32Array {
         return this._dataBuffer;
     }
 
-    /**
-     * @internal
-     */
     set _elements(value: Float32Array) {
         let currentLength = value.length;
-        currentLength = currentLength > 8 ? 8 : currentLength;
+        currentLength = currentLength > 16 ? 16 : currentLength;
         this._currentLength = currentLength;
-        this._dataBuffer.set(value);
+        this._dataBuffer.set(value.subarray(0, currentLength));
         this._formatData();
     }
 
-    /**@internal 曲线编辑范围*/
+    /**
+     * @en Curve editing range
+     * @zh 曲线编辑范围
+     */
     _curveMin: number;
-    /**@internal 曲线编辑范围*/
+
+    /**
+     * @en Curve editing range
+     * @zh 曲线编辑范围
+     */
     _curveMax: number;
     /**
      * @en The number of gradient floats.
@@ -65,8 +72,8 @@ export class GradientDataNumber implements IClone {
      * @zh 创建一个 GradientDataNumber 类的实例。
      */
     constructor() {
-        // this._elements = new Float32Array(8);
-        this._dataBuffer = new Float32Array(8);
+        // this._elements = new Float32Array(16);
+        this._dataBuffer = new Float32Array(16);
     }
 
     /**
@@ -75,8 +82,8 @@ export class GradientDataNumber implements IClone {
      * @zh 格式化数据，确保数据的最大值为 1。
      */
     _formatData() {
-        if (this._currentLength == 8) return;
-        if (this._elements[this._currentLength - 2] !== 1) {
+        if (this._currentLength == 16) return;
+        if (this._currentLength >= 2 && this._elements[this._currentLength - 2] !== 1) {
             this._elements[this._currentLength] = 1;
             this._elements[this._currentLength + 1] = this._elements[this._currentLength - 1];
         }
@@ -91,17 +98,17 @@ export class GradientDataNumber implements IClone {
      * @param value 浮点值。
      */
     add(key: number, value: number): void {
-        if (this._currentLength < 8) {
+        if (this._currentLength < 16) {
 
-            if ((this._currentLength === 6) && ((key !== 1))) {
+            if ((this._currentLength === 14) && ((key !== 1))) {
                 key = 1;
-                console.log("GradientDataNumber warning:the forth key is  be force set to 1.");
+                console.log("GradientDataNumber warning:the eighth key is  be force set to 1.");
             }
 
             this._elements[this._currentLength++] = key;
             this._elements[this._currentLength++] = value;
         } else {
-            console.log("GradientDataNumber warning:data count must lessEqual than 4");
+            console.log("GradientDataNumber warning:data count must lessEqual than 8");
         }
     }
 

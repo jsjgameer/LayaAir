@@ -9,6 +9,7 @@ import { RenderTargetFormat } from "../../../RenderEngine/RenderEnum/RenderTarge
 import { TextureCompareMode } from "../../../RenderEngine/RenderEnum/TextureCompareMode";
 import { TextureDimension } from "../../../RenderEngine/RenderEnum/TextureDimension";
 import { TextureFormat } from "../../../RenderEngine/RenderEnum/TextureFormat";
+import { InternalRenderTarget } from "../../DriverDesign/RenderDevice/InternalRenderTarget";
 import { ITextureContext } from "../../DriverDesign/RenderDevice/ITextureContext";
 import { WebGLEngine } from "./WebGLEngine";
 import { WebGLExtension } from "./WebGLEngine/GLEnum/WebGLExtension";
@@ -38,6 +39,9 @@ export class GLTextureContext extends GLObject implements ITextureContext {
         this._compressedTextureETC = this._engine._supportCapatable.getExtension(WebGLExtension.WEBGL_compressed_texture_etc)
         this._compressedTextureASTC = this._engine._supportCapatable.getExtension(WebGLExtension.WEBGL_compressed_texture_astc)
         this._webgl_depth_texture = this._engine._supportCapatable.getExtension(WebGLExtension.WEBGL_depth_texture);
+    }
+    createRenderTargetFromArrayLayer(arrayTex: InternalTexture, layer: number, colorFormat: RenderTargetFormat, depthStencilFormat: RenderTargetFormat, sRGB: boolean): InternalRenderTarget {
+        throw new Error("Method not implemented.");
     }
     createTexture3DInternal(dimension: TextureDimension, width: number, height: number, depth: number, format: TextureFormat, generateMipmap: boolean, sRGB: boolean, premultipliedAlpha: boolean): InternalTexture {
         return null;
@@ -69,6 +73,11 @@ export class GLTextureContext extends GLObject implements ITextureContext {
         this._glParam.format = null;
         this._glParam.type = null;
         switch (format) {
+            case TextureFormat.Alpha8:
+                this._glParam.internalFormat = gl.ALPHA;
+                this._glParam.format = gl.ALPHA;
+                this._glParam.type = gl.UNSIGNED_BYTE;
+                break;
             case TextureFormat.R8G8B8:
                 this._glParam.internalFormat = useSRGB ? this._sRGB.SRGB_EXT : gl.RGB;
                 this._glParam.format = this._glParam.internalFormat;
@@ -334,6 +343,12 @@ export class GLTextureContext extends GLObject implements ITextureContext {
             typedSize: 1
         }
         switch (format) {
+            case TextureFormat.Alpha8:
+                formatParams.channels = 1;
+                formatParams.bytesPerPixel = 1;
+                formatParams.dataTypedCons = Uint8Array
+                formatParams.typedSize = 1;
+                return formatParams;
             case TextureFormat.R8G8B8A8:
                 formatParams.channels = 4;
                 formatParams.bytesPerPixel = 4;
@@ -397,6 +412,9 @@ export class GLTextureContext extends GLObject implements ITextureContext {
         let srgb_alpha = this._sRGB ? this._sRGB.SRGB_ALPHA_EXT : gl.RGBA;
 
         switch (tex.internalFormat) {
+            case gl.ALPHA:
+                channels = 1;
+                break;
             case srgb:
             case gl.RGB:
                 channels = 3;
@@ -789,13 +807,13 @@ export class GLTextureContext extends GLObject implements ITextureContext {
                 let dataLength = (((Math.max(4, mipmapWidth) / 4) * Math.max(4, mipmapHeight)) / 4) * blockBytes;
                 let sourceData = new Uint8Array(source, dataOffset, dataLength);
                 gl.compressedTexImage2D(target, index, internalFormat, mipmapWidth, mipmapHeight, 0, sourceData);
-                memory += sourceData.length;
+                memory += sourceData.byteLength;
                 dataOffset += bpp ? (mipmapWidth * mipmapHeight * (bpp / 8)) : dataLength;
             }
             else {
                 let dataLength = mipmapWidth * mipmapHeight * formatParams.channels;
                 let sourceData = new dataTypeConstur(source, dataOffset, dataLength);
-                memory += sourceData.length;
+                memory += sourceData.byteLength;
                 gl.texImage2D(target, index, internalFormat, mipmapWidth, mipmapHeight, 0, format, type, sourceData);
 
                 dataOffset += dataLength * channelsByte;
@@ -854,7 +872,7 @@ export class GLTextureContext extends GLObject implements ITextureContext {
             if (compressed) {
                 let sourceData = new Uint8Array(source, dataOffset, imageSize);
                 gl.compressedTexImage2D(target, index, internalFormat, mipmapWidth, mipmapHeight, 0, sourceData);
-                memory += sourceData.length;
+                memory += sourceData.byteLength;
             }
             else {
                 let pixelParams = this.getFormatPixelsParams(ktxInfo.format);

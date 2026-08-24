@@ -107,7 +107,6 @@ export class AnimatorState2D extends EventDispatcher implements IClone {
     transitions: AnimatorTransition2D[] = [];
 
     /**
-     * @internal
      * @en Priority Transition List.
      * @zh 优先过渡列表。
      */
@@ -117,7 +116,7 @@ export class AnimatorState2D extends EventDispatcher implements IClone {
     _scripts: AnimatorState2DScript[] | null = null;
 
     /**@internal */
-    _realtimeDatas: Array<number | string | boolean | Vector3> = [];
+    _realtimeDatas: Array<number | string | boolean | { pos: Vector3, rotation: Vector3 }> = [];
 
     /**
      * @en Animation Clip

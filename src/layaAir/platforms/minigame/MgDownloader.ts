@@ -38,7 +38,7 @@ export class MgDownloader extends Downloader {
         if (Browser.onVVMiniGame || Browser.onQGMiniGame) //vivo&oppo
             this.supportSubPackageMultiLevelFolders = false;
 
-        if (Browser.onWXMiniGame || Browser.onHWMiniGame) //微信小游戏、华为小游戏不需要这个
+        if (Browser.onWXMiniGame || Browser.onHWMiniGame || Browser.onTTMiniGame) //微信小游戏、华为小游戏、抖音小游戏不需要这个
             this.escapeZhCharsInURL = false;
 
         if (enableCache) {
@@ -88,11 +88,24 @@ export class MgDownloader extends Downloader {
     }
 
     image(owner: any, url: string, originalUrl: string, onProgress: ProgressCallback, onComplete: DownloadCompleteCallback): void {
+        let skipCache = false;
+        if (Browser.onTBMiniGame) {
+            if ((window as any).__NOT_TBMINIGAME__ !== undefined) {
+                skipCache = (window as any).__NOT_TBMINIGAME__;
+            }
+        }
+        if (skipCache) {
+            if (url.startsWith("http://") || url.startsWith("https://")) {
+                super.image(owner, url, originalUrl, onProgress, onComplete);
+            } else {
+                super.image(owner, this.escapeURL(url), originalUrl, onProgress, onComplete);
+            }
+            return;
+        }
         if (!url.startsWith("http://") && !url.startsWith("https://") || !this.cacheManager) {
             super.image(owner, this.escapeURL(url), originalUrl, onProgress, onComplete);
             return;
         }
-
         this.cacheManager.getFile(url).then(cacheFilePath => {
             if (cacheFilePath)
                 super.image(owner, cacheFilePath, originalUrl, onProgress, onComplete);
@@ -117,6 +130,7 @@ export class MgDownloader extends Downloader {
                 this.subPackages[path] = packageName;
             }
         }
+
         let loadSubpackageParams: any = {
             success: () => {
                 onComplete({ loadScript: false });
@@ -136,7 +150,6 @@ export class MgDownloader extends Downloader {
 
         let loadTask = PAL.g.loadSubpackage(loadSubpackageParams);
 
-
         onProgress && loadTask.onProgressUpdate && loadTask.onProgressUpdate(res => onProgress(res.progress));
     }
 
@@ -146,7 +159,7 @@ export class MgDownloader extends Downloader {
             success: (res) => {
                 if (res.statusCode == null || res.statusCode === 200) {
                     let filePath = res.tempFilePath || (res as any).apFilePath; //淘宝用apFilePath
-                    if (this.cacheManager)
+                    if (this.cacheManager && url.indexOf("?v=") === -1) //带有?v=的URL是强制不缓存的
                         this.cacheManager.addFile(url, filePath);
                     onComplete(filePath);
                 }

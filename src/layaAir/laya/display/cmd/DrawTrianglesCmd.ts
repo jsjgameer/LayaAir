@@ -9,6 +9,9 @@ import { VertexStream } from "../../utils/VertexStream"
 import { IGraphicsBoundsAssembler, IGraphicsCmd } from "../IGraphics";
 import { GraphicsRunner } from "../Scene2DSpecial/GraphicsRunner"
 import { Rectangle } from "../../maths/Rectangle"
+import { Config } from "../../../Config";
+import { UVClippingUtils } from "../../webgl/utils/UVClippingUtils";
+import { drawTrianglesBatched } from "./DrawTrianglesBatchHelper";
 
 const className = "DrawTrianglesCmd";
 
@@ -17,6 +20,9 @@ const className = "DrawTrianglesCmd";
  * @zh 绘制三角形命令
  */
 export class DrawTrianglesCmd implements IGraphicsCmd {
+    /** @internal */
+    _cacheData: any;
+    
     /**
      * @en Identifier for the DrawTrianglesCmd
      * @zh 绘制三角形命令的标识符
@@ -73,11 +79,18 @@ export class DrawTrianglesCmd implements IGraphicsCmd {
      * @zh 颜色变换。
      */
     color: number | null;
+
+    colors: ArrayLike<number> | null;
     /**
      * @en Mesh factory for creating the mesh.
      * @zh 用于创建网格的工厂。
      */
     mesh: IMeshFactory;
+
+    /** @internal 标记 */
+    _dynamic: Vector4 = null;
+
+    private _tempUVs: Float32Array = null;
 
     /**
      * @en Create a DrawTrianglesCmd instance
@@ -109,7 +122,7 @@ export class DrawTrianglesCmd implements IGraphicsCmd {
         matrix?: Matrix, alpha?: number, color?: string | number, blendMode?: string): DrawTrianglesCmd {
         var cmd: DrawTrianglesCmd = Pool.getItemByClass(className, DrawTrianglesCmd);
         cmd.texture = texture;
-        texture._addReference();
+        texture?._addReference();
         cmd.x = x;
         cmd.y = y;
         cmd.vertices = vertices;
@@ -119,6 +132,7 @@ export class DrawTrianglesCmd implements IGraphicsCmd {
         cmd.alpha = alpha ?? 1;
         cmd.color = color != null ? ColorUtils.create(color).numColor : 0xffffffff;
         cmd.blendMode = blendMode;
+        cmd._dynamic = texture?._dynamic?.uv;
         return cmd;
     }
 
@@ -137,11 +151,12 @@ export class DrawTrianglesCmd implements IGraphicsCmd {
     static create2(texture: Texture, mesh: IMeshFactory, color?: string | number): DrawTrianglesCmd {
         var cmd: DrawTrianglesCmd = Pool.getItemByClass(className, DrawTrianglesCmd);
         cmd.texture = texture;
-        texture._addReference();
+        texture?._addReference();
         cmd.x = 0;
         cmd.y = 0;
         cmd.mesh = mesh;
         cmd.color = color != null ? ColorUtils.create(color).numColor : 0xffffffff;
+        cmd._dynamic = texture._dynamic?.uv;
         return cmd;
     }
 
@@ -157,6 +172,10 @@ export class DrawTrianglesCmd implements IGraphicsCmd {
         this.indices = null;
         this.matrix = null;
         this.mesh = null;
+        this.colors = null;
+        this._cacheData = null;
+        this._dynamic = null;
+        this._tempUVs = null;
         Pool.recover(className, this);
     }
 
@@ -171,13 +190,7 @@ export class DrawTrianglesCmd implements IGraphicsCmd {
      * @param gy 全局Y偏移  
      */
     run(runner: GraphicsRunner, gx: number, gy: number): void {
-        if (!this.texture)
-            return;
-
         if (this.mesh) {
-            if (!this.mesh)
-                return;
-
             let vb = VertexStream.pool.take(this.texture);
             vb.contentRect.setTo(0, 0, runner.sprite.width, runner.sprite.height);
             if (this.color)
@@ -189,14 +202,36 @@ export class DrawTrianglesCmd implements IGraphicsCmd {
                 console.error(e);
             }
 
-            runner.drawTriangles(this.texture, this.x + gx, this.y + gy, vb.getVertices(), vb.getUVs(), vb.getIndices(),
-                this.matrix, this.alpha, this.blendMode, null, vb.getColors(), this.texture.uvrect);
+            if (this.texture?.uvrect) {
+                if (Config.uvClipMode === "cpu") {
+                    const clippedData = UVClippingUtils.clipTrianglesByUVRange(
+                        vb.getVertices(), vb.getIndices(), vb.getUVs(), this.texture.uvrect, vb.getColors()
+                    );
+                    drawTrianglesBatched(runner, this.texture, this.x + gx, this.y + gy,
+                        clippedData.vertices, clippedData.uvs, clippedData.indices,
+                        this.matrix, this.alpha, this.blendMode, null, clippedData.colors,
+                        null);
+                } else {
+                    drawTrianglesBatched(runner, this.texture, this.x + gx, this.y + gy,
+                        vb.getVertices(), vb.getUVs(), vb.getIndices(),
+                        this.matrix, this.alpha, this.blendMode, null, vb.getColors(),
+                        this.texture.uvrect);
+                }
+            } else {
+                drawTrianglesBatched(runner, this.texture, this.x + gx, this.y + gy,
+                    vb.getVertices(), vb.getUVs(), vb.getIndices(),
+                    this.matrix, this.alpha, this.blendMode, null, vb.getColors(),
+                    null);
+            }
 
             VertexStream.pool.recover(vb);
         }
-        else {
-            runner.drawTriangles(this.texture, this.x + gx, this.y + gy, this.vertices, this.uvs, this.indices,
-                this.matrix, this.alpha, this.blendMode, this.color);
+        else if (this.vertices && this.uvs && this.indices) {
+            // 直接传递顶点数据的路径
+            drawTrianglesBatched(runner, this.texture, this.x + gx, this.y + gy,
+                this.vertices, this.uvs, this.indices,
+                this.matrix, this.alpha, this.blendMode,
+                this.color, this.colors as Float32Array, null);
         }
     }
 

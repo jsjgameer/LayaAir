@@ -8,7 +8,7 @@ import { GBox } from "./GBox";
 import { Rectangle } from "../maths/Rectangle";
 import { Sprite } from "../display/Sprite";
 import { InputManager } from "../events/InputManager";
-import { HideFlags } from "../Const";
+import { HideFlags, NodeFlags } from "../Const";
 import { Event } from "../events/Event";
 import { UIEvent } from "./UIEvent";
 import { GButton } from "./GButton";
@@ -36,6 +36,7 @@ export class GPanel extends GBox {
         let container = new PanelContainer();
         container.mouseThrough = true;
         container.hideFlags |= HideFlags.HideAndDontSave;
+        container._setBit(NodeFlags.LOCK_BY_EDITOR, true);
         this._maskContainer.addChild(container);
 
         this._setContainer(container);
@@ -182,7 +183,7 @@ export class GPanel extends GBox {
     /** @internal @blueprintEvent */
     GPanel_bpEvent: {
         [Event.CHANGED]: () => void;
-        [UIEvent.ClickItem]: (item: GButton) => void;
+        [UIEvent.ClickItem]: (item: GButton, evt: Event) => void;
         [UIEvent.Scroll]: () => void;
         [UIEvent.ScrollEnd]: () => void;
         [UIEvent.PullDownRelease]: () => void;

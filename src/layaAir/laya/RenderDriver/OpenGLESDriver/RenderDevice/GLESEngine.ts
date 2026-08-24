@@ -2,6 +2,7 @@ import { Config } from "../../../../Config";
 import { RenderCapable } from "../../../RenderEngine/RenderEnum/RenderCapable";
 import { RenderParams } from "../../../RenderEngine/RenderEnum/RenderParams";
 import { NotImplementedError } from "../../../utils/Error";
+import { Stat } from "../../../utils/Stat";
 import { IRenderEngine } from "../../DriverDesign/RenderDevice/IRenderEngine";
 import { ITextureContext } from "../../DriverDesign/RenderDevice/ITextureContext";
 import { InternalTexture } from "../../DriverDesign/RenderDevice/InternalTexture";
@@ -41,11 +42,12 @@ export class GLESEngine implements IRenderEngine {
   }
 
   endFrame(): void {
-    this._nativeObj.startFrame();
+    this._nativeObj.endFrame();
   }
 
   startFrame(): void {
-    this._nativeObj.endFrame();
+    this._nativeObj.loopCount = Stat.loopCount;
+    this._nativeObj.startFrame();
   }
 
   _remapZ: boolean = true;
@@ -72,7 +74,7 @@ export class GLESEngine implements IRenderEngine {
     this._nativeObj.addTexGammaDefine(key, value);
   }
   initRenderEngine(canvas: HTMLCanvasElement): void {
-    this._nativeObj.initRenderEngine();
+    this._nativeObj.initRenderEngine((canvas as any)._nativeObj);
     this._GLTextureContext = new GLESTextureContext(this._nativeObj.getTextureContext());
     Config._uniformBlock = Config.enableUniformBufferObject && this.getCapable(RenderCapable.UnifromBufferObject);
     Config.matUseUBO = Config.matUseUBO && this.getCapable(RenderCapable.UnifromBufferObject);
@@ -80,7 +82,7 @@ export class GLESEngine implements IRenderEngine {
     this._nativeObj.matUseUBO = Config.matUseUBO;
   }
   copySubFrameBuffertoTex(texture: InternalTexture, level: number, xoffset: number, yoffset: number, x: number, y: number, width: number, height: number): void {
-    throw new NotImplementedError();
+    this._nativeObj.copySubFrameBuffertoTex((texture as any)._nativeObj, level, xoffset, yoffset, x, y, width, height);
   }
   propertyNameToID(name: string): number {
     return this._nativeObj.propertyNameToID(name);

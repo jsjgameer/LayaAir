@@ -190,7 +190,8 @@ export class Sprite3D extends Node {
         this._transform = Laya3DRender.Render3DModuleDataFactory.createTransform(this);
         this._isStatic = isStatic ? StaticFlag.StaticBatch : StaticFlag.Normal;
         this.layer = 0;
-        this.name = name ? name : "New Sprite3D";
+        if (name != null)
+            this.name = name;
     }
 
     protected _onActive(): void {
@@ -201,6 +202,14 @@ export class Sprite3D extends Node {
     protected _onInActive(): void {
         super._onInActive();
         LayaGL.statAgent.recordCountData(StatElement.C_Sprite3DCount, -1);
+    }
+
+    protected _onActiveInScene(): void {
+        this._transform.activeInScene();
+    }
+
+    protected _onInActiveInScene(): void {
+        this._transform.inActiveInScene();
     }
 
     protected _onAdded(): void {

@@ -1,25 +1,6 @@
-vec3 gammaToLinear(in vec3 value)
-{
-    return pow((value + 0.055) / 1.055, vec3(2.4));
-}
+#include "ClipFrag.glsl";
+#include "Color.glsl";
 
-vec4 gammaToLinear(in vec4 value)
-{
-    return vec4(gammaToLinear(value.rgb), value.a);
-}
-
-vec3 linearToGamma(in vec3 value)
-{
-    return vec3(mix(pow(value.rgb, vec3(0.41666)) * 1.055 - vec3(0.055), value.rgb * 12.92, vec3(lessThanEqual(value.rgb, vec3(0.0031308)))));
-
-    // return pow(value, vec3(1.0 / 2.2));
-    // return pow(value, vec3(0.455));
-}
-
-vec4 linearToGamma(in vec4 value)
-{
-    return vec4(linearToGamma(value.rgb), value.a);
-}
 
 vec4 transspaceColor(vec4 color)
 {
@@ -39,8 +20,6 @@ vec4 transspaceColor(vec4 color)
  }
 
 
-varying vec2 v_cliped;
-
 #ifdef TEXTUREVS
     varying vec4 v_texcoordAlpha;
     varying vec4 v_color;
@@ -49,41 +28,50 @@ varying vec2 v_cliped;
     varying vec4 v_customs;
 
     //uniform
-    uniform sampler2D u_spriteTexture;
+    #ifdef USE_TEX_ARRAY
+        varying float v_texLayer;                 // 来自 VS 的图层索引
+        uniform sampler2DArray u_spriteTextureArray;
+    #else
+        uniform sampler2D u_spriteTexture;
+    #endif
 
     #ifdef FILLTEXTURE
         uniform vec4 u_TexRange; // startu,startv,urange, vrange
     #endif
 
     vec4 getSpriteTextureColor(){
+        vec2 uv;
         #ifdef FILLTEXTURE
-            vec4 color = texture2D(u_spriteTexture, fract(v_texcoordAlpha.xy) * u_TexRange.zw + u_TexRange.xy);
+            uv = fract(v_texcoordAlpha.xy) * u_TexRange.zw + u_TexRange.xy;
         #else
-            vec4 color = texture2D(u_spriteTexture, v_texcoordAlpha.xy);
+            uv = v_texcoordAlpha.xy;
+        #endif
+
+        #ifdef USE_TEX_ARRAY
+            // WebGL2: 使用 texture() 采样 2D Array（layer 为浮点数，内部按整数取层）
+            vec4 color = texture(u_spriteTextureArray, vec3(uv, v_texLayer));
+        #else
+            vec4 color = texture2D(u_spriteTexture, uv);
         #endif
         return transspaceColor(color);
     }
 
     void setglColor(in vec4 color){
-        float useTex = step( 1.0 , v_useTex);
-        color = mix(vec4(1., 1., 1., 1.), color, useTex);
-        
-        vec4 clampedRange = v_customs;
-        clampedRange.xy = max(v_customs.xy, vec2(0.0, 0.0));
-        clampedRange.zw = min(v_customs.xy + v_customs.zw, vec2(1.0, 1.0));
-        
-        // 计算是否在裁剪范围内
-        vec2 inRange = step(clampedRange.xy, v_texcoordAlpha.xy) * step(v_texcoordAlpha.xy, clampedRange.zw);
-        float useTexture = inRange.x * inRange.y;
-        
-        float useClip = step( 1.0 , v_useClip);
-        
-        float clipAlpha = mix(1.0, useTexture, useClip);
-        
-        color *= clipAlpha;
+        // if(v_useTex <= 0.)
+        //     color = vec4(1., 1., 1., 1.);
+        float useTex = step(1.0, v_useTex);
+        color = color * useTex + (1.0 - useTex);
+
+        #ifdef UV_CLIP_GPU
+            if (v_useClip >= 1.0) {
+                vec2 uv = v_texcoordAlpha.xy;
+                vec4 c = v_customs;
+                if (uv.x < c.x || uv.x > c.x + c.z || uv.y < c.y || uv.y > c.y + c.w)
+                    discard;
+            }
+        #endif
 
         color.a *= v_color.w;
-        
         vec4 transColor = v_color;
         #ifndef GAMMASPACE
             transColor = gammaToLinear(v_color);
@@ -98,6 +86,7 @@ varying vec2 v_cliped;
     varying vec4 v_color;
     uniform sampler2D u_baseRender2DTexture;
     uniform vec4 u_baseRenderColor;
+    uniform vec4 u_tilingOffset;
 
 #ifdef LIGHT2D_ENABLE
     varying vec2 v_lightUV;
@@ -161,13 +150,3 @@ varying vec2 v_cliped;
 
 #endif
 
-void clip(){
-    if(v_cliped.x<0.) discard;
-    if(v_cliped.x>1.) discard;
-    if(v_cliped.y<0.) discard;
-    if(v_cliped.y>1.) discard;
-    // if(v_cliped.x<0.) gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
-    // if(v_cliped.x>1.) gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
-    // if(v_cliped.y<0.) gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);
-    // if(v_cliped.y>1.) gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);
-}

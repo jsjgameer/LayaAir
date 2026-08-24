@@ -113,7 +113,6 @@ export class Camera extends BaseCamera {
     static _contextScissorPortCatch: Vector4 = new Vector4(0, 0, 0, 0);
 
     /**
-     * @internal
      * @en Update flag
      * @zh 更新标志位
      */
@@ -170,7 +169,6 @@ export class Camera extends BaseCamera {
         camera.render(scene);
         camera.renderTarget = recoverTexture;
         scene.recaculateCullCamera();
-        scene._componentDriver.callPostRender();
 
         camera._aftRenderMainPass();
 
@@ -740,6 +738,11 @@ export class Camera extends BaseCamera {
         }
 
         this._renderDataModule.setProjectionViewMatrix(this._projectionViewMatrix);
+        // Pass camera forward direction to native for shadow cascade culling
+        if ((this._renderDataModule as any).setForward) {
+            this.transform.getForward(Vector3.TEMP);
+            (this._renderDataModule as any).setForward(Vector3.TEMP.x, Vector3.TEMP.y, Vector3.TEMP.z);
+        }
     }
 
     /**
@@ -886,7 +889,7 @@ export class Camera extends BaseCamera {
      * @zh 相机是否可以绘制深度纹理。
      */
     get canblitDepth() {
-        return this._canBlitDepth && this._internalRenderTexture && this._internalRenderTexture.depthStencilFormat != null;
+        return this._canBlitDepth && this._internalRenderTexture && this._internalRenderTexture.depthStencilFormat != null && this._cacheDepthTexture != null;
     }
 
     /**
@@ -1145,9 +1148,9 @@ export class Camera extends BaseCamera {
         }
         else {
             Matrix4x4.multiply(proMat, viewMat, this._projectionViewMatrix);
-            this._renderDataModule.setProjectionViewMatrix(this._projectionViewMatrix);
             projectView = this._projectionViewMatrix;
         }
+        this._renderDataModule.setProjectionViewMatrix(projectView);
         this._shaderValues.setMatrix4x4(BaseCamera.VIEWMATRIX, viewMat);
         this._shaderValues.setMatrix4x4(BaseCamera.PROJECTMATRIX, proMat);
         this._shaderValues.setMatrix4x4(BaseCamera.VIEWPROJECTMATRIX, projectView);
@@ -1306,10 +1309,11 @@ export class Camera extends BaseCamera {
         if (this._cacheDepth && this._internalRenderTexture) {
             if (this._cacheDepthTexture)
                 this._cacheDepthTexture._inPool ? 0 : RenderTexture.recoverToPool(this._cacheDepthTexture);
-            this._cacheDepthTexture = this._internalRenderTexture;
+            this._cacheDepthTexture = this._internalRenderTexture as RenderTexture;
+            this._internalRenderTexture = null;
         }
         else {
-            this._internalRenderTexture && RenderTexture.recoverToPool(this._internalRenderTexture);
+            this._internalRenderTexture && (!this._internalRenderTexture._inPool) && RenderTexture.recoverToPool(this._internalRenderTexture);
         }
 
         // Camera.depthPass.cleanUp();
@@ -1512,6 +1516,10 @@ export class Camera extends BaseCamera {
         this._offScreenRenderTexture = null;
         if (this._opaqueTexture) {
             RenderTexture.recoverToPool(this._opaqueTexture);
+        }
+        // 释放 native cameraNode：缺这步会让 cull slot 不回收，跨场景切换 cull_bit 错位
+        if (this._renderDataModule && (this._renderDataModule as any).destroy) {
+            (this._renderDataModule as any).destroy();
         }
         this._Render3DProcess.destroy();
         this.transform.off(Event.TRANSFORM_CHANGED, this, this._onTransformChanged);

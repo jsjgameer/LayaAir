@@ -5,6 +5,7 @@ import { FloatKeyframe } from "../../maths/FloatKeyframe";
 import { Gradient } from "../../maths/Gradient";
 import { Point } from "../../maths/Point";
 import { Vector3 } from "../../maths/Vector3";
+import { Vector4 } from "../../maths/Vector4";
 import { BaseRenderNode2D } from "../../NodeRender2D/BaseRenderNode2D";
 import { ShaderFeatureType } from "../../RenderEngine/RenderShader/Shader3D";
 import { BaseTexture } from "../../resource/BaseTexture";
@@ -176,13 +177,17 @@ export class Trail2DRender extends BaseRenderNode2D {
         renderElement.value2DShaderData = this._spriteShaderData;
         renderElement.renderStateIsBySprite = false;
         renderElement.nodeCommonMap = this._getcommonUniformMap();
-        renderElement.owner = this.owner._struct
-        BaseRenderNode2D._setRenderElement2DMaterial(renderElement, this._materials[0] ? this._materials[0] : Trail2DRender.defaultTrail2DMaterial);
+        renderElement.owner = this.owner._struct;
+        BaseRenderNode2D._setRenderElement2DMaterial(renderElement, this._getElementMaterial(0));
         this._renderElements[0] = renderElement;
         this.owner._struct.renderElements = this._renderElements;
         this._renderHandle.needUseMatrix = false;//因为顶点便是world
     }
 
+    /** @internal */
+    protected _getElementMaterial(index: number): Material {
+        return this._materials[index] || Trail2DRender.defaultTrail2DMaterial;
+    }
 
     onPreRender(): void {
         let curtime = this._trailFilter._curtime += Math.min(Laya.timer.delta / 1000, 0.016);
@@ -193,6 +198,9 @@ export class Trail2DRender extends BaseRenderNode2D {
         this.owner.globalTrans.getPos(globalPos);
         let curPosV3 = Vector3.TEMP;
         curPosV3.set(globalPos.x, globalPos.y, 0);
+
+        // 获取全局缩放值，用于拖尾宽度跟随父节点缩放
+        let globalScale = Math.max(Math.abs(this.owner.globalTrans.scaleX), Math.abs(this.owner.globalTrans.scaleY)) || 1;
 
         trailGeometry._updateDisappear(curtime, this.time);
         if (!Vector3.equals(this._trailFilter._lastPosition, curPosV3)) {
@@ -208,9 +216,9 @@ export class Trail2DRender extends BaseRenderNode2D {
                 Vector3.cross(delVector3, forward, pointAtoBVector3);
 
                 Vector3.normalize(pointAtoBVector3, pointAtoBVector3);
-                Vector3.scale(pointAtoBVector3, this.widthMultiplier / 2, pointAtoBVector3);
+                Vector3.scale(pointAtoBVector3, this.widthMultiplier * globalScale / 2, pointAtoBVector3);
                 var delLength: number = Vector3.scalarLength(delVector3);
-                trailGeometry._addTrailByNextPosition(curPosV3, curtime, this.minVertexDistance, pointAtoBVector3, delLength)
+                trailGeometry._addTrailByNextPosition(curPosV3, curtime, this.minVertexDistance * globalScale, pointAtoBVector3, delLength)
             }
         }
         trailGeometry._updateVertexBufferUV(this.colorGradient, this.textureMode, 50);
@@ -237,7 +245,11 @@ export class Trail2DRender extends BaseRenderNode2D {
         this._renderElements = [];
         this._materials = [];
 
-        if (!Trail2DRender.defaultTrail2DMaterial)
-            Trail2DShaderInit.init();
+
     }
 }
+
+Laya.addAfterInitCallback(() => {
+    if (!Trail2DRender.defaultTrail2DMaterial)
+        Trail2DShaderInit.init();
+})

@@ -19,6 +19,7 @@ import { Transform3D } from "../../Transform3D";
 import { DrawElementCMDData } from "../../../../RenderDriver/DriverDesign/3DRenderPass/IRender3DCMD";
 import { IRenderElement3D } from "../../../../RenderDriver/DriverDesign/3DRenderPass/I3DRenderPass";
 import { Pool } from "../../../../utils/Pool";
+import { ReflectionProbe } from "../../../component/Volume/reflectionProbe/ReflectionProbe";
 
 /**
  * @en DrawMeshInstancedCMD class for instanced mesh drawing command.
@@ -157,7 +158,17 @@ export class DrawMeshInstancedCMD extends Command {
     set mesh(value: Mesh) {
         if (this._mesh == value)
             return;
+
         BaseRender.changeVertexDefine(this._mesh, value, this._render._baseRenderNode.shaderData);
+
+        if (this._mesh) {
+            this._mesh._removeReference();
+        }
+
+        if (value) {
+            value._addReference();
+        }
+
         this._mesh = value;
         if (!this._mesh)
             return;
@@ -166,7 +177,12 @@ export class DrawMeshInstancedCMD extends Command {
             for (let i = 0, n = submeshs.length; i < n; i++) {
                 let element = this._instanceRenderElementArray[i] = this._instanceRenderElementArray[i] ? this._instanceRenderElementArray[i] : new RenderElement();
 
-                let geometry = this._instanceGeometryArray[i] = this._instanceGeometryArray[i] ? this._instanceGeometryArray[i] : new MeshInstanceGeometry(submeshs[i]);
+                let geometry = this._instanceGeometryArray[i];
+                if (geometry) {
+                    geometry.subMesh = submeshs[i];
+                } else {
+                    geometry = this._instanceGeometryArray[i] = new MeshInstanceGeometry(submeshs[i]);
+                }
                 geometry.bufferState = this._instanceBufferState;
                 geometry.instanceCount = this._drawnums;
 
@@ -174,17 +190,19 @@ export class DrawMeshInstancedCMD extends Command {
 
                 element.transform = this._transform;
                 element.material = this._material;
-                // element.renderSubShader = this._material._shader.getSubShaderAt(this._subShaderIndex);
                 element._subShaderIndex = this._subShaderIndex;
                 element.render = this._render;
                 element._renderElementOBJ.owner = this._render._baseRenderNode;
-
-
             }
         } else {
             let element = this._instanceRenderElementArray[0] = this._instanceRenderElementArray[0] ? this._instanceRenderElementArray[0] : new RenderElement();
 
-            let geometry = this._instanceGeometryArray[0] = this._instanceGeometryArray[0] ? this._instanceGeometryArray[0] : new MeshInstanceGeometry(submeshs[this._subMeshIndex]);
+            let geometry = this._instanceGeometryArray[0];
+            if (geometry) {
+                geometry.subMesh = submeshs[this._subMeshIndex];
+            } else {
+                geometry = this._instanceGeometryArray[0] = new MeshInstanceGeometry(submeshs[this._subMeshIndex]);
+            }
             geometry.bufferState = this._instanceBufferState;
             geometry.instanceCount = this._drawnums;
             element.setGeometry(geometry);
@@ -192,10 +210,8 @@ export class DrawMeshInstancedCMD extends Command {
             element.transform = this._transform;
             element.material = this._material;
             element.render = this._render;
-            //element.renderSubShader = this._material._shader.getSubShaderAt(this._subShaderIndex);
 
-            element._renderElementOBJ.owner = this._render._baseRenderNode
-
+            element._renderElementOBJ.owner = this._render._baseRenderNode;
         }
     }
 
@@ -294,6 +310,10 @@ export class DrawMeshInstancedCMD extends Command {
      */
     renderUpdateElement(renderElement: RenderElement, context: RenderContext3D): IRenderElement3D {
         let renderObj = renderElement._renderElementOBJ;
+        renderObj.owner.probeReflection = context.scene.sceneReflectionProb._dataModule;
+        renderObj.owner.additionShaderData.set(ReflectionProbe.BlockName, context.scene.sceneReflectionProb.shaderData);
+        renderObj.owner.additionShaderData = renderObj.owner.additionShaderData;
+        renderObj.owner._applyReflection();
         renderObj.isRender = renderElement._geometry._prepareRender(context);
         renderElement._geometry._updateRenderParams(context);
         return renderObj;
@@ -341,13 +361,8 @@ export class DrawMeshInstancedCMD extends Command {
         this._material = null;
         this._instanceBufferState.destroy();
         this._instanceBufferState = null;
-        delete this._instanceRenderElementArray;
-        this._instanceRenderElementArray = [];
-        delete this._instanceGeometryArray;
-        this._instanceGeometryArray = [];
         this._drawElementCMDData.setRenderelements([]);
         this.mesh = null;
-
     }
 
     /**
@@ -361,10 +376,21 @@ export class DrawMeshInstancedCMD extends Command {
         this._material = null;
         this._instanceBufferState.destroy();
         this._instanceBufferState = null;
-        delete this._instanceRenderElementArray;
-        this._instanceRenderElementArray = [];
-        delete this._instanceGeometryArray;
-        this._instanceGeometryArray = [];
+        for (let i = 0, n = this._instanceRenderElementArray.length; i < n; i++) {
+            let element = this._instanceRenderElementArray[i];
+            if (element) {
+                element._renderElementOBJ.destroy();
+                element.destroy();
+            }
+        }
+        this._instanceRenderElementArray.length = 0;
+        for (let i = 0, n = this._instanceGeometryArray.length; i < n; i++) {
+            let geometry = this._instanceGeometryArray[i];
+            if (geometry) {
+                geometry.destroy();
+            }
+        }
+        this._instanceGeometryArray.length = 0;
         this.mesh = null;
     }
 

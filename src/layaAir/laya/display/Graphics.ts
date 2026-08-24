@@ -1,6 +1,6 @@
 import { Sprite } from "./Sprite";
 import { GraphicsBounds } from "./GraphicsBounds";
-import { BaseRender2DType, RepaintFlag, SpriteConst } from "./SpriteConst";
+import { BaseRender2DType, RepaintFlag, SpriteConst, TransformKind } from "./SpriteConst";
 import { AlphaCmd } from "./cmd/AlphaCmd"
 import { ClipRectCmd } from "./cmd/ClipRectCmd"
 import { Draw9GridTextureCmd } from "./cmd/Draw9GridTextureCmd"
@@ -30,7 +30,6 @@ import { Rectangle } from "../maths/Rectangle"
 import { Texture } from "../resource/Texture"
 import { Utils } from "../utils/Utils"
 import { ILaya } from "../../ILaya";
-import { WordText } from "../utils/WordText";
 import { ColorUtils } from "../utils/ColorUtils";
 import type { Material } from "../resource/Material";
 import { DrawEllipseCmd } from "./cmd/DrawEllipseCmd";
@@ -38,11 +37,8 @@ import { DrawRoundRectCmd } from "./cmd/DrawRoundRectCmd";
 import { LayaGL } from "../layagl/LayaGL";
 import { ShaderDataType } from "../RenderDriver/DriverDesign/RenderDevice/ShaderData";
 import { IGraphicsCmd } from "./IGraphics";
-import { GraphicsRunner } from "./Scene2DSpecial/GraphicsRunner";
-import { I2DPrimitiveDataHandle } from "../RenderDriver/RenderModuleData/Design/2D/IRender2DDataHandle";
-import { GraphicsRenderData } from "./Scene2DSpecial/GraphicsUtils";
 import { ShaderFeatureType } from "../RenderEngine/RenderShader/Shader3D";
-
+import { Stat } from "../utils/Stat";
 /**
  * @en The Graphics class is used to create drawing display objects. Graphics can draw multiple bitmaps or vector graphics simultaneously, and can also combine instructions such as save, restore, transform, scale, rotate, translate, alpha, etc. to change the drawing effect.
  * Graphics is stored as a command stream and can be accessed through the cmds property. Graphics is a lighter object than Sprite, and proper use can improve application performance (for example, changing a large number of node drawings to a collection of Graphics commands of one node can reduce the consumption of creating a large number of nodes).
@@ -50,9 +46,7 @@ import { ShaderFeatureType } from "../RenderEngine/RenderShader/Shader3D";
  * Graphics以命令流方式存储，可以通过cmds属性访问所有命令流。Graphics是比Sprite更轻量级的对象，合理使用能提高应用性能(比如把大量的节点绘图改为一个节点的Graphics命令集合，能减少大量节点创建消耗)。
  */
 export class Graphics {
-
     /**
-     * @internal
      * @en Add global Uniform Data Map
      * @param propertyID The ID of the property
      * @param propertyKey The key of the property
@@ -69,10 +63,7 @@ export class Graphics {
 
     /** @readonly */
     owner: Sprite | null = null;
-
-    /** @internal */
-    _data: GraphicsRenderData;
-
+    
     /** @internal 是否优先使用精灵状态 */
     _useSpriteState: boolean = true;
 
@@ -86,9 +77,10 @@ export class Graphics {
     private _cmds: IGraphicsCmd[] = [];
     private _graphicBounds: GraphicsBounds | null = null;
     private _material: Material;
-    private _renderDataHandle: I2DPrimitiveDataHandle;
-    private _modified: boolean = false;
-    private _display: boolean = false;
+    /** @internal */
+    _modified: number = -1;
+    /** @internal 需要响应布局变化的cmd计数 */
+    private _layoutRepaintCount: number = 0;
 
     /**
     * @en Whether to use sprite state.
@@ -106,18 +98,11 @@ export class Graphics {
         this.repaint();
     }
 
+    /** @internal 是否需要缓存 */
+    needCache: boolean = false;
+    
     /**@ignore @blueprintIgnore */
     constructor() {
-        this._renderDataHandle = LayaGL.render2DRenderPassFactory.create2D2DPrimitiveDataHandle();
-    }
-
-    protected _isMaterialVaild(value: Material): boolean {
-        return value.checkType(ShaderFeatureType.D2_TextureSV);
-    }
-
-    /** @internal */
-    onModified() {
-        this._modified = true;
     }
 
     /**
@@ -138,8 +123,6 @@ export class Graphics {
         }
         this._graphicBounds && this._graphicBounds.destroy();
         this._graphicBounds = null;
-        this._renderDataHandle && this._renderDataHandle.destroy();
-        this._data = null;
         this.owner = null;
     }
 
@@ -165,13 +148,17 @@ export class Graphics {
         if (exclude) {
             this._cmds[0] = exclude;
             this._cmds.length = 1;
+            // 重新计算布局重绘计数（只计算exclude）
+            this._layoutRepaintCount = 0;
+            if (exclude.needsLayoutRepaint) {
+                this._layoutRepaintCount = exclude.needsLayoutRepaint();
+            }
         }
-        else
+        else {
             this._cmds.length = 0;
-        
-        if (this._data) {
-            this._data.clear();
+            this._layoutRepaintCount = 0;
         }
+
         this.repaint();
     }
 
@@ -185,10 +172,22 @@ export class Graphics {
      * @zh 重绘此对象。
      */
     repaint(): void {
-        this._modified = true;
+        this._modified = Stat.loopCount;
         this._graphicBounds?.reset();
-        this._checkDisplay();
-        this.owner?.repaint(RepaintFlag.Graphics);
+        if (this.owner) {
+            this.owner._graphicsRenderer._checkDisplay();
+            this.owner.repaint(RepaintFlag.Graphics);
+        }
+    }
+
+    /**
+     * @internal
+     * @en Get the count of commands that need to respond to layout changes.
+     * @zh 获取需要响应布局变化的命令数量。
+     * @returns The count of commands that need layout repaint.
+     */
+    getLayoutRepaintCount(): number {
+        return this._layoutRepaintCount;
     }
 
     /**
@@ -206,6 +205,14 @@ export class Graphics {
                     cmd.recover();
             });
         }
+        
+        this._layoutRepaintCount = 0;
+        for (let cmd of value) {
+            if (cmd.needsLayoutRepaint) {
+                this._layoutRepaintCount += cmd.needsLayoutRepaint();
+            }
+        }
+        
         this._cmds = value;
         this.repaint();
     }
@@ -226,6 +233,11 @@ export class Graphics {
             this._cmds.push(cmd);
         else
             this._cmds.splice(index, 0, cmd);
+        
+        if (cmd.needsLayoutRepaint) {
+            this._layoutRepaintCount += cmd.needsLayoutRepaint();
+        }
+        
         // this.repaint();
         this.repaint();
         return cmd;
@@ -243,6 +255,11 @@ export class Graphics {
         let i = this.cmds.indexOf(cmd);
         if (i != -1) {
             this._cmds.splice(i, 1);
+            
+            if (cmd.needsLayoutRepaint) {
+                this._layoutRepaintCount -= cmd.needsLayoutRepaint();
+            }
+            
             this.repaint();
         }
 
@@ -264,11 +281,21 @@ export class Graphics {
      */
     replaceCmd<T extends IGraphicsCmd>(oldCmd: IGraphicsCmd, newCmd: T, recover?: boolean): T {
         let index = this._cmds.indexOf(oldCmd);
+        
+        if (oldCmd && oldCmd.needsLayoutRepaint) {
+            this._layoutRepaintCount -= oldCmd.needsLayoutRepaint();
+        }
+        
         if (newCmd != null) {
             if (index !== -1)
                 this._cmds[index] = newCmd;
             else
                 this._cmds.push(newCmd);
+            
+            if (newCmd.needsLayoutRepaint) {
+                this._layoutRepaintCount += newCmd.needsLayoutRepaint();
+            }
+            
             this.repaint();
         }
         else if (index != -1) {
@@ -284,40 +311,6 @@ export class Graphics {
         return newCmd;
     }
 
-    /** @internal */
-    _checkDisplay() {
-        if (!this.owner || this.owner.destroyed) {
-            this._display = false;
-            return;
-        }
-
-        let value = !this.owner._renderNode && (this._cmds.length > 0 || this.owner._texture != null);
-        if (this._display === value)
-            return;
-
-        this._display = value;
-
-        let struct = this.owner._struct;
-        if (value) {
-            this._modified = true;
-            this.owner._initShaderData();
-            this.owner._renderType |= SpriteConst.GRAPHICS;
-            struct.renderType = BaseRender2DType.graphics;
-            struct.renderDataHandler = this._renderDataHandle;
-            struct.renderElements = this._data._renderElements;
-            this.owner._updateStruct();
-        } else {
-            this.owner._renderType &= ~SpriteConst.GRAPHICS;
-            if (struct.renderElements === this._data._renderElements) {
-                struct.renderElements = [];
-            }
-            if (this._data) {
-                this._data.clear();
-            }
-            struct.renderType = -1;
-            struct.renderDataHandler = null;
-        }
-    }
 
     /**
      * @en Get the position and size information matrix (CPU-intensive, frequent use may cause lag, use sparingly).
@@ -352,7 +345,7 @@ export class Graphics {
     }
 
     set material(value: Material) {
-        if (value && !this._isMaterialVaild(value))
+        if (value && !value.checkType(ShaderFeatureType.D2_TextureSV))
             return;
 
         if (this._material == value)
@@ -521,7 +514,7 @@ export class Graphics {
      * @param color 定义文本颜色，例如"#ff0000"
      * @param textAlign 文本对齐方式。可选值："left"、"center"、"right"
      */
-    fillText(text: string | WordText, x: number, y: number, font: string, color: string, textAlign: string): FillTextCmd {
+    fillText(text: string, x: number, y: number, font: string, color: string, textAlign: string): FillTextCmd {
         return this.addCmd(FillTextCmd.create(text, x, y, font, color, textAlign, 0, ""));
     }
 
@@ -545,7 +538,7 @@ export class Graphics {
      * @param lineWidth 镶边线条宽度
      * @param borderColor 定义镶边文本颜色
      */
-    fillBorderText(text: string | WordText, x: number, y: number, font: string, fillColor: string, textAlign: string, lineWidth: number, borderColor: string): FillTextCmd {
+    fillBorderText(text: string, x: number, y: number, font: string, fillColor: string, textAlign: string, lineWidth: number, borderColor: string): FillTextCmd {
         return this.addCmd(FillTextCmd.create(text, x, y, font, fillColor, textAlign, lineWidth, borderColor));
     }
 
@@ -567,7 +560,7 @@ export class Graphics {
      * @param lineWidth 线条宽度
      * @param textAlign 文本对齐方式。可选值："left"、"center"、"right"
      */
-    strokeText(text: string | WordText, x: number, y: number, font: string, color: string, lineWidth: number, textAlign: string): FillTextCmd {
+    strokeText(text: string, x: number, y: number, font: string, color: string, lineWidth: number, textAlign: string): FillTextCmd {
         return this.addCmd(FillTextCmd.create(text, x, y, font, null, textAlign, lineWidth, color));
     }
 
@@ -708,86 +701,6 @@ export class Graphics {
     }
 
     /**
-     * @internal
-     */
-    _render(runner: GraphicsRunner, x: number = 0, y: number = 0): void {
-        if (!this.owner || this.owner.destroyed || this.owner._struct.renderType !== BaseRender2DType.graphics)
-            return;
-
-        if (!this._modified
-            && this._check() //校验是否都有效
-            // && this._data.offsetX === x
-            // && this._data.offsetY === y
-        ) {
-            this._data.setRenderElement(this.owner._struct, this._renderDataHandle);
-            return;
-        }
-
-        this._data.clear();
-        runner.clear();
-        runner.sprite = this.owner;
-        runner._graphicsData = this._data;
-        runner._material = this._material;
-
-        let oldBlendMode = runner.globalCompositeOperation;
-        runner.globalCompositeOperation = this.owner._struct.blendMode;
-
-        var cmds = this._cmds;
-        for (let i = 0, n = cmds.length; i < n; i++) {
-            cmds[i].run(runner, x, y);
-        }
-        //sprite.texture
-        this._renderSpriteTexture(runner, x, y);
-
-        this._data.updateRenderElement(this, this.owner._struct, this._renderDataHandle);
-
-        runner.globalCompositeOperation = oldBlendMode;
-        runner._material = null;
-        runner._graphicsData = null;
-        runner.sprite = null;
-        this._modified = false;
-    }
-
-    private _check(): boolean {
-        let len = this._data._submits.length;
-        for (let i = 0; i < len; i++) {
-            let submit = this._data._submits.elements[i];
-            let texture = submit._internalInfo.textureHost;
-            if (!texture) continue;
-            let bitmap = (texture as Texture).bitmap;
-            if (bitmap && bitmap.destroyed) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private _renderSpriteTexture(runner: GraphicsRunner, x: number, y: number): void {
-        let sprite = this.owner;
-        let tex = sprite._texture;
-        if (!tex)
-            return;
-
-        if (tex._getSource(() => {
-            this.owner.graphics.repaint();
-        })) {
-            var width = sprite._isWidthSet ? sprite._width : tex.sourceWidth;
-            var height = sprite._isHeightSet ? sprite._height : tex.sourceHeight;
-            var wRate = width / tex.sourceWidth;
-            var hRate = height / tex.sourceHeight;
-            width = tex.width * wRate;
-            height = tex.height * hRate;
-            if (width > 0 && height > 0) {
-                let px = x + tex.offsetX * wRate;
-                let py = y + tex.offsetY * hRate;
-                // let px = 0 + tex.offsetX * wRate;
-                // let py = 0 + tex.offsetY * hRate;
-                runner.drawTexture(tex, px, py, width, height, 0xffffffff);
-            }
-        }
-    }
-
-    /**
      * @en Draw a line.
      * @param fromX X-axis starting position
      * @param fromY Y-axis starting position
@@ -898,8 +811,8 @@ export class Graphics {
      * @param lineWidth （可选）边框宽度。默认为1。
      * @param percent （可选）位置和大小是否是百分比值
      */
-    drawRoundRect(x: number, y: number, width: number, height: number, lt: number, rt: number, lb: number, rb: number, fillColor: any, lineColor: any = null, lineWidth: number = 1, percent?: boolean) {
-        return this.addCmd(DrawRoundRectCmd.create(x, y, width, height, lt, rt, lb, rb, fillColor, lineColor, lineWidth, percent));
+    drawRoundRect(x: number, y: number, width: number, height: number, lt: number, rt: number, lb: number, rb: number, fillColor: any, lineColor: any = null, lineWidth: number = 1, percent?: boolean, minNum?: number, segPixel?: number) {
+        return this.addCmd(DrawRoundRectCmd.create(x, y, width, height, lt, rt, lb, rb, fillColor, lineColor, lineWidth, percent, minNum, segPixel));
     }
 
     /**

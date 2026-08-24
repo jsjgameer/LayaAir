@@ -1,5 +1,5 @@
+import { LayaEnv } from "../../LayaEnv";
 import { HideFlags } from "../Const";
-import { Node } from "../display/Node";
 import { Loader } from "../net/Loader";
 import { Prefab } from "../resource/HierarchyResource";
 import { GWidget } from "./GWidget";
@@ -73,7 +73,7 @@ export class WidgetPool {
         else
             ret = <GWidget>(<Prefab>Loader.getRes(url)).create(this._createOptions);
         if (ret)
-            ret.hideFlags |= HideFlags.HideAndDontSave;
+            ret.hideFlags |= (LayaEnv.isPlaying ? HideFlags.DontSave : HideFlags.HideAndDontSave);
         return ret;
     }
 

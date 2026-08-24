@@ -4,6 +4,7 @@ import { Vector4 } from "../maths/Vector4";
 import { TileAlternativesData } from "./TileAlternativesData";
 import { TileShape } from "./TileMapEnum";
 import { TileSetCellData } from "./TileSetCellData";
+import { ChunkCellInfo } from "./TileMapChunkData";
 
 const BYTE_POS_CELL = 24;
 const BYTE_POS_GROUP = 16;
@@ -155,6 +156,77 @@ export class TileMapUtils {
             }
         }
         return keys.length > 0 ? keys[keys.length - 1] + 1 : 0;
+    }
+
+    /**
+     * 将 Tiled 45度 坐标系转换为 TileMapLayer 菱形坐标系。
+     * @param tiledX 
+     * @param tiledY
+     * @param out    复用输出
+     */
+    public static tiledTLayer(tiledX: number, tiledY: number, out: Vector2 = new Vector2()): Vector2 {
+        const tileMapY = tiledX + tiledY;
+        const parity = tileMapY & 1;
+        const tileMapX = (tiledX - tiledY - parity) >> 1;
+        out.x = tileMapX;
+        out.y = tileMapY;
+        return out;
+    }
+
+    /**
+     * 将 TileMapLayer 菱形坐标系转换回 Tiled 45度 坐标系。
+     * @param tileMapX 
+     * @param tileMapY 
+     * @param out      复用输出
+     */
+    public static layerToTiled(tileMapX: number, tileMapY: number, out: Vector2 = new Vector2()): Vector2 {
+        tileMapX = Math.floor(tileMapX);
+        tileMapY = Math.floor(tileMapY);
+        const parity = tileMapY & 1;
+        const tiledX = tileMapX + ((tileMapY + parity) >> 1);
+        const tiledY = tileMapY - tiledX;
+        out.x = tiledX;
+        out.y = tiledY;
+        return out;
+    }
+
+    /**
+     * Y优先排序比较：先 sortY，再 zOrderValue，再 cellx
+     */
+    public static compareYSort(a: ChunkCellInfo, b: ChunkCellInfo): number {
+        if (a.sortY !== b.sortY)
+            return a.sortY - b.sortY;
+        if (a.zOrderValue !== b.zOrderValue)
+            return a.zOrderValue - b.zOrderValue;
+        if (a.cellx !== b.cellx)
+            return a.cellx - b.cellx;
+        return a.chuckLocalindex - b.chuckLocalindex;
+    }
+
+    /**
+     * Z优先排序比较：先 zOrderValue，再 sortY，再 cellx
+     */
+    public static compareZSort(a: ChunkCellInfo, b: ChunkCellInfo): number {
+        if (a.zOrderValue !== b.zOrderValue)
+            return a.zOrderValue - b.zOrderValue;
+        if (a.sortY !== b.sortY)
+            return a.sortY - b.sortY;
+        if (a.cellx !== b.cellx)
+            return a.cellx - b.cellx;
+        return a.chuckLocalindex - b.chuckLocalindex;
+    }
+
+    /**
+     * X优先排序比较：先 cellx，再 sortY，再 zOrderValue
+     */
+    public static compareXSort(a: ChunkCellInfo, b: ChunkCellInfo): number {
+        if (a.cellx !== b.cellx)
+            return a.cellx - b.cellx;
+        if (a.sortY !== b.sortY)
+            return a.sortY - b.sortY;
+        if (a.zOrderValue !== b.zOrderValue)
+            return a.zOrderValue - b.zOrderValue;
+        return a.chuckLocalindex - b.chuckLocalindex;
     }
 
 }

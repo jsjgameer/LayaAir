@@ -53,11 +53,11 @@ export class GLESRenderContext3D implements IRenderContext3D {
         this._cameraData = value;
         this._nativeObj.setCameraData(value ? value._nativeObj : null);
     }
-    public get sceneUpdataMask(): number {
-        return this._nativeObj._sceneUpdataMask;
+    public get sceneUpdateMask(): number {
+        return this._nativeObj._sceneUpdateMask;
     }
-    public set sceneUpdataMask(value: number) {
-        this._nativeObj._sceneUpdataMask = value;
+    public set sceneUpdateMask(value: number) {
+        this._nativeObj._sceneUpdateMask = value;
     }
     public get cameraUpdateMask(): number {
         return this._nativeObj._cameraUpdateMask;
@@ -87,6 +87,7 @@ export class GLESRenderContext3D implements IRenderContext3D {
         this._nativeObj.setGlobalConfigShaderData((Shader3D._configDefineValues as any)._nativeObj);
         this.cameraUpdateMask = 0;
     }
+    preDrawUniformMaps: Set<string>;
     setRenderTarget(value: GLESInternalRT, clearFlag: RenderClearFlag): void {
         this._nativeObj.setRenderTarget(value ? value._nativeObj : null, clearFlag);
     }
@@ -99,6 +100,11 @@ export class GLESRenderContext3D implements IRenderContext3D {
     setClearData(clearFlag: number, color: Color, depth: number, stencil: number): number {
         return this._nativeObj.setClearData(clearFlag, color, depth, stencil);
     }
+
+    clearRenderTarget(): void {
+        this._nativeObj.clearRenderTarget();
+    }
+
     private _tempList: any = [];
     drawRenderElementList(list: FastSinglelist<GLESRenderElement3D>): number {
         this._tempList.length = 0;
@@ -122,5 +128,4 @@ export class GLESRenderContext3D implements IRenderContext3D {
 
         this._nativeObj.runCMDList(nativeobCMDs);
     }
-
 }

@@ -71,6 +71,7 @@ export interface IGraphics2DBufferBlock {
     vertexs: IGraphics2DVertexBlock[],
     indexView: I2DGraphicIndexDataView,
     vertexBuffer: IVertexBuffer,
+    textureArrayIndex: number;
 }
 
 /**
@@ -81,6 +82,7 @@ export interface I2DPrimitiveDataHandle extends IRender2DDataHandle {
     mask: IRenderStruct2D | null;
     logicMatrix: Matrix | null;
     applyVertexBufferBlock(views: IGraphics2DBufferBlock[]): void;
+    skipBufferUpdate(): void;
 }
 
 /**
@@ -100,6 +102,7 @@ export interface IMesh2DRenderDataHandle extends I2DBaseRenderDataHandle {
     baseTexture: BaseTexture;
     normal2DTexture: BaseTexture;
     normal2DStrength: number;
+    tilingOffset: Vector4;
 }
 
 /**

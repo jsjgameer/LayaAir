@@ -7,8 +7,11 @@ import { IRender2DDataHandle, I2DPrimitiveDataHandle, I2DBaseRenderDataHandle, I
 import { IRender2DPass, IRender2DPassManager } from "../../RenderModuleData/Design/2D/IRender2DPass";
 import { IRenderStruct2D } from "../../RenderModuleData/Design/2D/IRenderStruct2D";
 import { RTRender2DPass, RTRender2DPassManager } from "../../RenderModuleData/RuntimeModuleData/2D/RTRender2DPass";
-import { RTBaseRenderDataHandle, RTGraphics2DBufferBlock, RTGraphics2DVertexBlock, RTMesh2DRenderDataHandle, RTPrimitiveDataHandle, RTRender2DDataHandle, RTSpineRenderDataHandle } from "../../RenderModuleData/RuntimeModuleData/2D/RTRenderDataHandle";
+import { RTBaseRenderDataHandle, RTEmptyRender2DDataHandle, RTGraphics2DBufferBlock, RTGraphics2DVertexBlock, RTMesh2DRenderDataHandle, RTPrimitiveDataHandle, RTRender2DDataHandle, RTSpineRenderDataHandle } from "../../RenderModuleData/RuntimeModuleData/2D/RTRenderDataHandle";
 import { RTGlobalRenderData, RTRenderStruct2D } from "../../RenderModuleData/RuntimeModuleData/2D/RTRenderStruct2D";
+import { ITransform2DMemoryFactory } from "../../../display/transform2d/ITransform2DMemory";
+// 导入即触发 RT sweep 下沉注册(addBeforeInitCallback,内部按 conchRTTransform2DStore 门控)。
+import { RTTransform2DMemoryFactory } from "../../../display/transform2d/runtime/RTTransform2DStore";
 import { GLESSetRenderData, GLESSetShaderDefine } from "../RenderDevice/GLESRenderCMD";
 import { GLESBlit2DQuadCMD, GLESDraw2DElementCMD, GLESSetRendertarget2DCMD } from "./GLES2DRenderCMD";
 import { GLESRenderContext2D } from "./GLESRenderContext2D";
@@ -18,6 +21,10 @@ import { IPrimitiveRenderElement2D } from "../../DriverDesign/2DRenderPass/IRend
 import { GLESPrimitiveRenderElement2D } from "./GLESPrimitiveRenderElement2D";
 
 export class GLESRender2DProcess implements I2DRenderPassFactory {
+    createTransform2DMemoryFactory(): ITransform2DMemoryFactory {
+        // 数据创建下沉 native:JS 用 NativeMemory 分配共享块、传下去让 native 绑定。GLES/LayaX 不回退 WebMemory。
+        return new RTTransform2DMemoryFactory();
+    }
     createGraphic2DBufferBlock(): IGraphics2DBufferBlock {
         return new RTGraphics2DBufferBlock();
     }
@@ -87,6 +94,9 @@ export class GLESRender2DProcess implements I2DRenderPassFactory {
     }
     createRenderStruct2D(): IRenderStruct2D {
         return new RTRenderStruct2D();
+    }
+    createEmptyRenderDataHandle(): IRender2DDataHandle {
+        return new RTEmptyRender2DDataHandle();
     }
 }
 

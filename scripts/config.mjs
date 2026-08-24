@@ -39,7 +39,7 @@ export const allBundles = [{
         'laya/RenderEngine/*.*',
 
         'laya/RenderDriver/RenderModuleData/Design/**/*.*',
-      
+
         'laya/loaders/**/*.*',
         'laya/maths/**/*.*',
         'laya/media/**/*.*',
@@ -53,10 +53,11 @@ export const allBundles = [{
         'laya/tween/**/*.*',
         'laya/tools/**/*.*',
         'laya/html/**/*.*',
+        'laya/large/**/*.*',
         'Config3D.ts',
         "laya/bt/**/*.*",
         'laya/physics/IPhysiscs2DFactory.ts',
-
+        'laya/large/**/*.*',
         'laya/platform/**/*.*',
     ],
     copy: ['jsLibs/laya.workerloader.js']
@@ -104,6 +105,13 @@ export const allBundles = [{
 },
 
 {
+    name: 'no-render',
+    input: [
+        'laya/RenderDriver/NoRenderDriver/**/*.*',
+    ],
+},
+
+{
     name: 'opengl_2D',
     input: [
         'laya/RenderDriver/OpenGLESDriver/RenderDevice/**/*.*',
@@ -117,6 +125,49 @@ export const allBundles = [{
     input: [
         'laya/RenderDriver/OpenGLESDriver/3DRenderPass/**/*.*',
         'laya/RenderDriver/RenderModuleData/RuntimeModuleData/3D/*.*',
+        'laya/RenderDriver/RenderModuleData/RuntimeModuleData/3D/3DRenderProcess/*.*',
+    ],
+},
+{
+    name: 'modernAPIs_2D',
+    input: [
+        'laya/RenderDriver/LayaXDriver/RenderDevice/**/*.*',
+        'laya/RenderDriver/LayaXDriver/ShaderCompile/**/*.*',
+        'laya/RenderDriver/LayaXDriver/2DRenderPass/**/*.*',
+        // 共用 shader 数据类（被 RenderDevice 反向依赖，必须随 2D base 一起加载）
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXDefineDatas.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXRenderState.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXShaderPass.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXSubShader.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXUnitRenderModuleDataFactory.ts',
+        //引擎核心
+        'laya/RenderDriver/RenderModuleData/RuntimeModuleData/*.*',
+        'laya/RenderDriver/RenderModuleData/RuntimeModuleData/2D/*.*',
+    ],
+},
+{
+    name: 'modernAPIs_3D',
+    input: [
+        'laya/RenderDriver/LayaXDriver/3DRenderPass/**/*.*',
+        // 3D 节点数据（不含上面已放入 LayaX_2D 的共用 shader 类）
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaX3DRenderModuleFactory.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXBaseRenderNode.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXBounds.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXCameraNodeData.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXDirectLight.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXLightmapData.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXMeshRenderNode.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXPointLight.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXReflectionProbe.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXSceneNodeData.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXSimpleSkinRenderNode.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXSkinRenderNode.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXSpotLight.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXTransform3D.ts',
+        'laya/RenderDriver/LayaXDriver/RenderModuleData/LayaXVolumetricGI.ts',
+		//引擎核心
+        'laya/RenderDriver/RenderModuleData/RuntimeModuleData/3D/*.*',
+        'laya/RenderDriver/RenderModuleData/RuntimeModuleData/3D/3DRenderProcess/*.*',
     ],
 },
 {
@@ -133,29 +184,29 @@ export const allBundles = [{
     input: [
         'laya/RenderDriver/DriverCommon/**/*.*',
         'laya/RenderDriver/WebGLDriver/3DRenderPass/**/*.*',
-        'laya/RenderDriver/RenderModuleData/WebModuleData/3D/*.*',
+        'laya/RenderDriver/RenderModuleData/WebModuleData/3D/**/*.*',
     ],
 },
-// {
-//     name: 'webgpu_2D',
-//     input: [
-//         'laya/RenderDriver/WebGPUDriver/RenderDevice/**/*.*',
-//         'laya/RenderDriver/WebGPUDriver/ShaderCompile/**/*.*',
-//         'laya/RenderDriver/WebGPUDriver/2DRenderPass/**/*.*',
-//         'laya/RenderDriver/RenderModuleData/WebModuleData/*.*',
-//         'laya/RenderDriver/RenderModuleData/WebModuleData/2D/*.*',
-//     ],
-//     copy: ['jsLibs/nagabind_bg.wasm', 'jsLibs/nagabind.js', 'jsLibs/shader_compiler_web.wasm', 'jsLibs/shader_compiler_web.js']
-// },
-// {
-//     name: 'webgpu_3D',
-//     input: [
-//         'laya/RenderDriver/DriverCommon/**/*.*',
-//         'laya/RenderDriver/WebGPUDriver/ShaderCompile/**/*.*',
-//         'laya/RenderDriver/WebGPUDriver/3DRenderPass/**/*.*',
-//         'laya/RenderDriver/RenderModuleData/WebModuleData/3D/*.*',
-//     ],
-// },
+{
+    name: 'webgpu_2D',
+    input: [
+        'laya/RenderDriver/WebGPUDriver/RenderDevice/**/*.*',
+        'laya/RenderDriver/WebGPUDriver/ShaderCompile/**/*.*',
+        'laya/RenderDriver/WebGPUDriver/2DRenderPass/**/*.*',
+        'laya/RenderDriver/RenderModuleData/WebModuleData/*.*',
+        'laya/RenderDriver/RenderModuleData/WebModuleData/2D/*.*',
+    ],
+    copy: ['jsLibs/nagabind_bg.wasm', 'jsLibs/nagabind.js', 'jsLibs/shader_compiler_web.wasm', 'jsLibs/shader_compiler_web.js']
+},
+{
+    name: 'webgpu_3D',
+    input: [
+        'laya/RenderDriver/DriverCommon/**/*.*',
+        'laya/RenderDriver/WebGPUDriver/ShaderCompile/**/*.*',
+        'laya/RenderDriver/WebGPUDriver/3DRenderPass/**/*.*',
+        'laya/RenderDriver/RenderModuleData/WebModuleData/3D/**/*.*',
+    ],
+},
 {
     name: 'physics3D',
     input: [
@@ -251,13 +302,51 @@ export const allBundles = [{
         'UIConfig.ts',
     ],
 },
+//// SPINE
 {
     name: 'spine',
     input: [
-        'laya/spine/**/*.*'
+        'laya/spine/interface/*.*',
+        'laya/spine/shader/SpineShaderInit.ts',
+        'laya/spine/web/**/*.*',
+        'laya/spine/ExternalSkin.ts',
+        'laya/spine/ExternalSkinItem.ts',
+        'laya/spine/ModuleDef.ts',
+        'laya/spine/Spine2DRenderNode.ts',
+        'laya/spine/SpineBakeScript.ts',
+        'laya/spine/SpineConst.ts',
+        'laya/spine/SpineSkeleton.ts',
+        'laya/spine/SpineTemplet.ts',
+        'laya/spine/SpineTempletLoader.ts',
     ],
     copy: ['jsLibs/spine-core-*.js']
 },
+{
+    name: 'spine3D',
+    input: [
+        'laya/spine/shader/Spine3DShaderInit.ts',
+        'laya/spine/ModuleDef3D.ts',
+        'laya/spine/Spine3DRenderer.ts',
+    ]
+},
+{
+    name: 'native-spine42',
+    input: [
+        'laya/spine/interface/*.*',
+        'laya/spine/shader/**/*.*',
+        'laya/spine/native/**/*.*',
+        'laya/spine/ExternalSkin.ts',
+        'laya/spine/ExternalSkinItem.ts',
+        'laya/spine/ModuleDef.ts',
+        'laya/spine/Spine2DRenderNode.ts',
+        'laya/spine/SpineBakeScript.ts',
+        'laya/spine/SpineConst.ts',
+        'laya/spine/SpineSkeleton.ts',
+        'laya/spine/SpineTemplet.ts',
+        'laya/spine/SpineTempletLoader.ts',
+    ]
+},
+/////
 {
     name: 'ani',
     input: [
@@ -388,6 +477,13 @@ export const allBundles = [{
     ],
 },
 {
+    name: 'adapter-bilibili',
+    input: [
+        'platforms/minigame/**/*.*',
+        'platforms/bilibili/**/*.*'
+    ],
+},
+{
     name: 'adapter-bytedance',
     input: [
         'platforms/minigame/**/*.*',
@@ -430,8 +526,29 @@ export const allBundles = [{
     ],
 },
 {
+    name: 'adapter-bilibili',
+    input: [
+        'platforms/minigame/**/*.*',
+        'platforms/bilibili/**/*.*'
+    ],
+},
+{
     name: 'ik',
     input: [
         'laya/ik/**/*.ts'
     ]
-}];
+},
+{
+    name: 'bridge',
+    input: [
+        'laya/bridge/**/*.ts'
+    ]
+},
+{
+    name: 'vfx',
+    input: [
+        'laya/vfx/**/*.*'
+    ]
+},
+
+];

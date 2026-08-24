@@ -1,38 +1,23 @@
-import { LayaEnv } from "../../../../LayaEnv";
-import { BufferTargetType, BufferUsage } from "../../../RenderEngine/RenderEnum/BufferTargetType";
-import { DrawType } from "../../../RenderEngine/RenderEnum/DrawType";
 import { RenderClearFlag } from "../../../RenderEngine/RenderEnum/RenderClearFlag";
-import { MeshTopology } from "../../../RenderEngine/RenderEnum/RenderPologyMode";
-import { Shader3D, ShaderFeatureType } from "../../../RenderEngine/RenderShader/Shader3D";
-import { SubShader } from "../../../RenderEngine/RenderShader/SubShader";
-import { VertexDeclaration } from "../../../RenderEngine/VertexDeclaration";
+import { Shader3D } from "../../../RenderEngine/RenderShader/Shader3D";
 import { LayaGL } from "../../../layagl/LayaGL";
 import { StatElement } from "../../../layagl/StatisticsContext";
 import { Color } from "../../../maths/Color";
-import { Vector3 } from "../../../maths/Vector3";
-import { VertexElement } from "../../../renders/VertexElement";
-import { VertexElementFormat } from "../../../renders/VertexElementFormat";
+import { Vector4 } from "../../../maths/Vector4";
 import { FastSinglelist } from "../../../utils/SingletonList";
 import { IRenderContext2D } from "../../DriverDesign/2DRenderPass/IRenderContext2D";
 import { IRenderCMD } from "../../DriverDesign/RenderDevice/IRenderCMD";
-import { ShaderData, ShaderDataType } from "../../DriverDesign/RenderDevice/ShaderData";
-import { RenderState } from "../../RenderModuleData/Design/RenderState";
 import { WebDefineDatas } from "../../RenderModuleData/WebModuleData/WebDefineDatas";
 import { WebGLShaderData } from "../../RenderModuleData/WebModuleData/WebGLShaderData";
 import { WebGLEngine } from "../RenderDevice/WebGLEngine";
 import { WebGLInternalRT } from "../RenderDevice/WebGLInternalRT";
-import { WebGLRenderGeometryElement } from "../RenderDevice/WebGLRenderGeometryElement";
-import { WebGLVertexBuffer } from "../RenderDevice/WebGLVertexBuffer";
+
 import { WebGLRenderElement2D } from "./WebGLRenderElement2D";
+import { WebGLShaderInstance } from "../RenderDevice/WebGLShaderInstance";
 
 export class WebglRenderContext2D implements IRenderContext2D {
-    //兼容ConchWebGL
-    static isCreateBlitScreenELement = false;
-    //兼容ConchWebGL
-    static blitScreenElement: WebGLRenderElement2D;
-    static blitContext: WebglRenderContext2D;
 
-    private _clearColor: Color = new Color(0, 0, 0, 0);
+    _clearColor: Color = new Color(0, 0, 0, 0);
     _destRT: WebGLInternalRT;
     invertY: boolean = false;
     pipelineMode: string = "Forward";
@@ -40,114 +25,24 @@ export class WebglRenderContext2D implements IRenderContext2D {
 
     _globalConfigShaderData: WebDefineDatas;
 
+    /** @internal 快速路径：上一个渲染元素的状态，供 Primitive 元素做状态跳过 */
+    _prevTypeKey: number = -1;
+    /** @internal */
+    _prevTextureKey: number = -1;
+    /** @internal */
+    _prevClip: any = null;
+    /** @internal */
+    _prevShaderIns: WebGLShaderInstance = null;
+    /** @internal */
+    _prevRenderType: number = -1;
+
     private _offscreenWidth: number;
     private _offscreenHeight: number;
+    private _offscreenX: number = 0;
+    private _offscreenY: number = 0;
 
     constructor() {
         this._globalConfigShaderData = Shader3D._configDefineValues as WebDefineDatas;
-        if (LayaEnv.isConch && !WebglRenderContext2D.isCreateBlitScreenELement) {
-            (!WebglRenderContext2D.isCreateBlitScreenELement) && this.setBlitScreenElement();
-            WebglRenderContext2D.blitContext = new WebglRenderContext2D();
-            let engine = LayaGL.renderEngine as WebGLEngine;
-            engine.on("endFrame", () => {
-                let last_main_frame_buffer = WebGLEngine._lastFrameBuffer_WebGLOBJ;
-                let last_main_frame = WebGLEngine._lastFrameBuffer;
-                WebGLEngine._lastFrameBuffer_WebGLOBJ = null;
-                WebGLEngine._lastFrameBuffer = null;
-                WebglRenderContext2D.blitContext.setOffscreenView((engine as WebGLEngine).getInnerWidth(), (engine as WebGLEngine).getInnerHeight());
-
-                WebglRenderContext2D.blitContext.setRenderTarget(null, true, Color.BLACK);
-                WebglRenderContext2D.blitScreenElement.materialShaderData._setInternalTexture(Shader3D.propertyNameToID("u_MainTex"), last_main_frame._textures[0]);
-                WebglRenderContext2D.blitContext.drawRenderElementOne(WebglRenderContext2D.blitScreenElement);
-                WebGLEngine._lastFrameBuffer_WebGLOBJ = last_main_frame_buffer;
-                WebGLEngine._lastFrameBuffer = last_main_frame;
-                WebGLEngine.instance.getTextureContext().bindRenderTarget(last_main_frame);
-            })
-        }
-    }
-
-
-    /**
-     * 兼容ConchWebGL
-     */
-    private setBlitScreenElement() {
-        let blitScreenElement = LayaGL.render2DRenderPassFactory.createRenderElement2D();
-        let shaderData = LayaGL.renderDeviceFactory.createShaderData();
-        let _vertices: Float32Array = new Float32Array([
-            1, 1, 1, 1,
-            1, -1, 1, 0,
-            -1, 1, 0, 1,
-            -1, -1, 0, 0]);
-
-        let _vertexBuffer = new WebGLVertexBuffer(BufferTargetType.ARRAY_BUFFER, BufferUsage.Dynamic);
-        _vertexBuffer.setDataLength(64);
-        _vertexBuffer.setData(_vertices.buffer, 0, 0, _vertices.buffer.byteLength);
-        let declaration = new VertexDeclaration(16, [new VertexElement(0, VertexElementFormat.Vector4, 0)]);
-        _vertexBuffer.vertexDeclaration = declaration;
-        let geometry = LayaGL.renderDeviceFactory.createRenderGeometryElement(MeshTopology.TriangleStrip, DrawType.DrawArray);
-        geometry.setDrawArrayParams(0, 4);
-        let bufferState = LayaGL.renderDeviceFactory.createBufferState();
-        bufferState.applyState([_vertexBuffer], null);
-        geometry.bufferState = bufferState;
-
-        //Shader
-        let attributeMap: { [name: string]: [number, ShaderDataType] } = {
-            'a_PositionTexcoord': [0, ShaderDataType.Vector4]
-        }
-        let uniformMap = {
-            "u_MainTex": ShaderDataType.Texture2D,
-        };
-        let shader = Shader3D.add("GLESblitScreen", false, false);
-        shader.shaderType = ShaderFeatureType.Default;
-        let subShader = new SubShader(attributeMap, uniformMap, {});
-        shader.addSubShader(subShader);
-        let vs = `
-            #define SHADER_NAME GLESblitScreenVS
-
-            varying vec2 v_Texcoord0;
-
-            void main()
-            {
-                gl_Position = vec4(- 1.0 + (a_PositionTexcoord.x + 1.0), (1.0 - ((- 1.0 + (-a_PositionTexcoord.y + 1.0)) + 1.0) / 2.0) * 2.0 - 1.0, 0.0, 1.0);
-
-                v_Texcoord0 = a_PositionTexcoord.zw;
-            }
-        `
-        let fs = `
-            #define SHADER_NAME GLESblitScreenFS
-
-            #include "Color.glsl";
-
-            varying vec2 v_Texcoord0;
-
-            void main()
-            {
-                vec4 mainColor = texture2D(u_MainTex, v_Texcoord0);
-               
-                gl_FragColor = mainColor;
-            }
-        `
-        let pass = subShader.addShaderPass(vs, fs);
-        pass.statefirst = true;
-        let blitState = pass.renderState;
-        blitState.depthTest = RenderState.DEPTHTEST_ALWAYS;
-        blitState.depthWrite = false;
-        blitState.cull = RenderState.CULL_NONE;
-        blitState.blend = RenderState.BLEND_DISABLE;
-        blitState.stencilRef = 1;
-        blitState.stencilTest = RenderState.STENCILTEST_OFF;
-        blitState.stencilWrite = false;
-        blitState.stencilOp = new Vector3(RenderState.STENCILOP_KEEP, RenderState.STENCILOP_KEEP, RenderState.STENCILOP_REPLACE);
-
-
-        blitScreenElement.geometry = geometry as WebGLRenderGeometryElement;
-        blitScreenElement.materialShaderData = shaderData as WebGLShaderData;
-        blitScreenElement.subShader = subShader;
-        blitScreenElement.renderStateIsBySprite = false;
-
-
-        WebglRenderContext2D.isCreateBlitScreenELement = true;
-        WebglRenderContext2D.blitScreenElement = blitScreenElement as WebGLRenderElement2D;
     }
 
     drawRenderElementList(list: FastSinglelist<WebGLRenderElement2D>): number {
@@ -158,9 +53,11 @@ export class WebglRenderContext2D implements IRenderContext2D {
         }
         LayaGL.statAgent.recordTimeData(StatElement.T_2DContextPre, performance.now() - time);
         time = performance.now();
+        this.resetFastState();
         for (var i: number = 0, n: number = list.length; i < n; i++) {
-            let element = list.elements[i];
-            element._render(this);//render
+            const element = list.elements[i];
+            element._render(this);
+            this._prevRenderType = element.owner ? element.owner.renderType : -1;
         }
         LayaGL.statAgent.recordCTData(StatElement.CT_2DDrawCall, list.length);
         LayaGL.statAgent.recordTimeData(StatElement.T_2DContextRender, performance.now() - time);
@@ -168,9 +65,24 @@ export class WebglRenderContext2D implements IRenderContext2D {
         return 0;
     }
 
-    setOffscreenView(width: number, height: number): void {
+    setOffscreenView(width: number, height: number, x: number = 0, y: number = 0): void {
         this._offscreenWidth = width;
         this._offscreenHeight = height;
+        this._offscreenX = x;
+        this._offscreenY = y;
+    }
+
+    getOffscreenView(out: Vector4): void {
+        out.setValue(this._offscreenX, this._offscreenY, this._offscreenWidth, this._offscreenHeight);
+    }
+
+    /** @internal */
+    resetFastState(): void {
+        this._prevTypeKey = -1;
+        this._prevTextureKey = -1;
+        this._prevClip = null;
+        this._prevShaderIns = null;
+        this._prevRenderType = -1;
     }
 
     setRenderTarget(value: WebGLInternalRT, clear: boolean, clearColor: Color): void {
@@ -178,10 +90,10 @@ export class WebglRenderContext2D implements IRenderContext2D {
         clearColor.cloneTo(this._clearColor);
         if (this._destRT) {
             WebGLEngine.instance.getTextureContext().bindRenderTarget(this._destRT);
-            WebGLEngine.instance.viewport(0, 0, this._destRT._textures[0].width, this._destRT._textures[0].height);
+            WebGLEngine.instance.viewport(this._offscreenX, this._offscreenY, this._destRT._textures[0].width, this._destRT._textures[0].height);
         } else {
             WebGLEngine.instance.getTextureContext().bindoutScreenTarget();
-            WebGLEngine.instance.viewport(0, 0, this._offscreenWidth, this._offscreenHeight);
+            WebGLEngine.instance.viewport(this._offscreenX, this._offscreenY, this._offscreenWidth, this._offscreenHeight);
         }
         WebGLEngine.instance.scissorTest(false);
         WebGLEngine.instance.clearRenderTexture(clear ? RenderClearFlag.Color : RenderClearFlag.Nothing, this._clearColor);
@@ -194,6 +106,7 @@ export class WebglRenderContext2D implements IRenderContext2D {
     drawRenderElementOne(node: WebGLRenderElement2D): void {
         node._prepare(this);
         node._render(this);
+        this._prevRenderType = node.owner ? node.owner.renderType : -1;
         LayaGL.statAgent.recordCTData(StatElement.CT_2DDrawCall, 1);
         LayaGL.renderEngine._framePassCount++;
     }

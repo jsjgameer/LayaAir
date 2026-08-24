@@ -82,7 +82,20 @@ export class NoRenderEngine implements IRenderEngine {
         return define;
     }
     getNamesByDefineData(defineData: IDefineDatas, out: string[]): void {
-
+        var maskMap: Array<{ [key: number]: string }> = NoRenderEngine._maskMap;
+        var mask: Array<number> = defineData._mask;
+        out.length = 0;
+        for (var i: number = 0, n: number = defineData._length; i < n; i++) {
+            var subMaskMap: { [key: number]: string } = maskMap[i];
+            var subMask: number = mask[i];
+            for (var j: number = 0; j < 32; j++) {
+                var d: number = 1 << j;
+                if (subMask > 0 && d > subMask)
+                    break;
+                if (subMask & d)
+                    out.push(subMaskMap[d]);
+            }
+        }
     }
     addTexGammaDefine(key: number, value: ShaderDefine): void {
     }
@@ -138,6 +151,15 @@ export class NoInternalRT implements InternalRenderTarget {
 
 
 export class NoTextureContext implements ITextureContext {
+    createRenderTargetFromArrayLayer(arrayTex: InternalTexture, layer: number, colorFormat: RenderTargetFormat, depthStencilFormat: RenderTargetFormat, sRGB: boolean): InternalRenderTarget {
+        const rt = new NoInternalRT();
+        rt._textures = [arrayTex];
+        rt.colorFormat = colorFormat;
+        rt.depthStencilFormat = depthStencilFormat;
+        rt.isSRGB = sRGB;
+        (rt as any)._arrayLayerIndex = layer;
+        return rt;
+    }
     needBitmap: boolean;
     createTextureInternal(dimension: TextureDimension, width: number, height: number, format: TextureFormat, generateMipmap: boolean, sRGB: boolean, premultipliedAlpha: boolean): InternalTexture {
         let internalTex = new NoInternalTexture();

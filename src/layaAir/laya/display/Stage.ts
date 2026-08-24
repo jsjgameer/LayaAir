@@ -1,4 +1,6 @@
 import { Sprite } from "./Sprite";
+import { Transform2DStore } from "./transform2d/Transform2DStore";
+import { Channel } from "./transform2d/Transform2DLayout";
 import { Node } from "./Node";
 import { Config } from "./../../Config";
 import { SpriteConst, SubPassFlag, TransformKind, RepaintFlag } from "./SpriteConst";
@@ -21,10 +23,12 @@ import { Timer } from "../utils/Timer";
 import { Tweener } from "../tween/Tweener";
 import { RenderTexture2D } from "../resource/RenderTexture2D";
 import { Render2DProcessor } from "./Render2DProcessor";
+import { PostProcess2D } from "./PostProcess2D";
 import { Color } from "../maths/Color";
 import { PAL } from "../platform/PlatformAdapters";
 import { TextRenderConfig } from "../webgl/text/TextRenderConfig";
 import { StatElement } from "../layagl/StatisticsContext";
+import { Render } from "../renders/Render";
 
 /**
  * @en Stage is the root node of the display list. All display objects are shown on the stage. It can be accessed through the Laya.stage singleton.
@@ -211,19 +215,14 @@ export class Stage extends Sprite {
      */
     readonly passManager: Render2DProcessor;
 
-    /** @internal */
     readonly _scene3Ds: Scene3D[] = [];
-    /** @internal */
     readonly _scene2Ds: Scene[] = [];
 
-    private _frameRate: string = "fast";
     private _screenMode: string = "none";
     private _scaleMode: string = "noscale";
     private _alignV: string = "top";
     private _alignH: string = "left";
     private _bgColor: string = "gray";
-    private _renderCount: number = 0;
-    private _frameStartTime: number = 0;
     private _isFocused: boolean;
     private _wgColor = new Color(0, 0, 0, 0);
     private _needUpdateCanvasSize: boolean = false;
@@ -516,10 +515,11 @@ export class Stage extends Sprite {
 
         //执行高清字体策略
         if (TextRenderConfig.scaleFontWithCtx) {
-            let fontScale = Math.max(Math.max(1, Math.min(TextRenderConfig.maxFontScale, ILaya.stage.scaleX)),
-                Math.max(1, Math.min(TextRenderConfig.maxFontScale, ILaya.stage.scaleY)));
+            let fontScale = Math.min(Math.max(1, ILaya.stage.scaleX, ILaya.stage.scaleY), TextRenderConfig.maxFontScale);
+            fontScale = 0.2 * Math.ceil(fontScale / 0.2); //以0.2倍为步进，避免频繁变更
             if (TextRenderConfig.fontScale !== fontScale) {
                 TextRenderConfig.fontScale = fontScale;
+                Render2DProcessor.runner._textRender.onFontScaleChanged();
 
                 const repaintTexts = (p: Sprite) => {
                     for (let child of p._children) {
@@ -559,6 +559,9 @@ export class Stage extends Sprite {
     }
 
     set scaleMode(value: string) {
+        if (this._scaleMode == value)
+            return;
+
         this._scaleMode = value;
         this.updateCanvasSize(true);
     }
@@ -581,6 +584,9 @@ export class Stage extends Sprite {
     }
 
     set alignH(value: string) {
+        if (this._alignH == value)
+            return;
+
         this._alignH = value;
         this.updateCanvasSize(true);
     }
@@ -603,6 +609,9 @@ export class Stage extends Sprite {
     }
 
     set alignV(value: string) {
+        if (this._alignV == value)
+            return;
+
         this._alignV = value;
         this.updateCanvasSize(true);
     }
@@ -661,7 +670,6 @@ export class Stage extends Sprite {
      * @zh 当前视窗由缩放模式导致的 X 轴缩放系数。
      */
     get clientScaleX(): number {
-        this.needUpdateCanvasSize();
         return this._scaleX;
     }
 
@@ -670,7 +678,6 @@ export class Stage extends Sprite {
      * @zh 当前视窗由缩放模式导致的 Y 轴缩放系数。
      */
     get clientScaleY(): number {
-        this.needUpdateCanvasSize();
         return this._scaleY;
     }
 
@@ -701,7 +708,7 @@ export class Stage extends Sprite {
      * 可以用来判断函数内时间消耗，通过合理控制每帧函数处理消耗时长，避免一帧做事情太多，对复杂计算分帧处理，能有效降低帧率波动。
      */
     getTimeFromFrameStart(): number {
-        return performance.now() - this._frameStartTime;
+        return performance.now() - Render.frameStartTime;
     }
 
     /**
@@ -726,34 +733,17 @@ export class Stage extends Sprite {
      * @param timestamp 当前时间戳
      */
     render(timestamp: number): void {
-        if (this._frameRate === Stage.FRAME_SLEEP) {
-            if (timestamp - this._frameStartTime < 1000)
-                return;
-            this._frameStartTime = timestamp;
-        } else {
-            if (!this._visible) {
-                this._renderCount++;
-                if (this._renderCount % 5 === 0) {
-                    Timer.callLaters._update(timestamp);
-                    Stat.loopCount++;
-                    this._runComponents();
-                    this._updateTimers(timestamp);
-                }
-                return;
-            }
-            this._frameStartTime = timestamp;
-        }
-
-        this._renderCount++;
-        let frameMode: string = this._frameRate === Stage.FRAME_MOUSE ? (((timestamp - InputManager.lastMouseTime) < 2000) ? Stage.FRAME_FAST : Stage.FRAME_SLOW) : this._frameRate;
-        let isFastMode: boolean = (frameMode !== Stage.FRAME_SLOW);
-        let isDoubleLoop: boolean = (this._renderCount % 2 === 0);
-
-        if (!isFastMode && !isDoubleLoop)//统一双帧处理渲染
+        if (!this._visible) {
+            Timer.callLaters._update(timestamp);
+            Stat.loopCount++;
+            this._runComponents();
+            this._updateTimers(timestamp);
             return;
+        }
 
         Timer.callLaters._update(timestamp);
         Stat.loopCount++;
+        Render2DProcessor.renderTime += (ILaya.timer?.delta || 0) * 0.001;
         LayaGL.renderEngine.startFrame();
 
         if (this.renderingEnabled) {
@@ -809,6 +799,24 @@ export class Stage extends Sprite {
             this._scene2Ds[i].render(0, 0);
         }
 
+        // 必须在 subpass/cacheAs/mask 渲染之前更新 SoA：subpass 渲染缓存内容时会读各 slot 的
+        // world 矩阵和 matrixFrame，若 update 晚于 subpass，matrixFrame 仍是上一帧，会被判成
+        // "矩阵没变"而跳过上传，导致 RT 用旧矩阵。放在 scene.render 之后(捕获其可能的布局写入)、
+        // subpass 之前。把 world 真变(Matrix 通道)的节点加入 _tranMatrixUpdateList 供 _updateStruct。
+        const t2dStore = Transform2DStore.instance;
+        t2dStore.update(Stat.loopCount);
+        const changedSlots = t2dStore.changedSlots;
+        const changedMasks = t2dStore.changedMasks;
+        for (let i = 0, n = t2dStore.changedCount; i < n; i++) {
+            // 只有 world 矩阵真变才驱动 _updateStruct(重算 renderMatrix/包围盒)。
+            // alpha/culling 变化不进这个列表——它们的重传由渲染遍历自检(各自 frame/repaint)。
+            if ((changedMasks[i] & Channel.Matrix) === 0)
+                continue;
+            const owner = t2dStore.getOwner(changedSlots[i]) as Sprite;
+            if (owner)
+                owner._globalTrans._notifyRenderSpriteTransChange();
+        }
+
         //subpass 分析  for
         for (let sprite of this._subpassUpdateList) {
             if (sprite._destroyed || !sprite._subpassUpdateFlag)
@@ -831,7 +839,7 @@ export class Stage extends Sprite {
 
             if (sprite.mask) {
                 sprite._oriRenderPass.mask = sprite.mask._struct;
-            }else{
+            } else {
                 sprite._oriRenderPass.mask = null;
             }
 
@@ -863,12 +871,14 @@ export class Stage extends Sprite {
         this._updateMatrixList(this._tranMatrixUpdateList, Stat.loopCount);
 
         for (let sprite of this._graphicUpdateList) {
-            if (sprite._graphics) {
-                sprite._graphics._render(Render2DProcessor.runner);
+            if (sprite._needGraphicsUpdate()) {
+                sprite._graphicsRenderer._render(Render2DProcessor.runner);
             }
         }
 
-        this.passManager.apply(Render2DProcessor.rendercontext2D);
+        Render2DProcessor.renderTime += (ILaya.timer?.delta || 0) * 0.001;
+        this.passManager.apply(Render2DProcessor.rendercontext2D, Render2DProcessor.renderTime);
+        PostProcess2D.postRenderAll();
 
         this._graphicUpdateList.clear();
         this._subpassUpdateList.clear();
@@ -933,15 +943,16 @@ export class Stage extends Sprite {
     }
 
     /**
+     * @deprecated Use Render.throttleMode instead.
      * @en Frame rate types:fast (default, full frame rate),slow (half of the full frame rate),mouse (full frame rate after mouse activity, switches to half frame rate if the mouse is idle for 2 seconds),sleep (1 frame per second)
      * @zh 当前帧率类型：fast(默认，满帧)，slow（满帧减半），mouse（鼠标活动后满帧，鼠标不动2秒后满帧减半），sleep（每秒1帧）。
      */
     get frameRate(): string {
-        return this._frameRate;
+        return Render.throttleMode === 0 ? "fast" : Render.throttleMode === 1 ? "slow" : Render.throttleMode === 2 ? "mouse" : "sleep";
     }
 
     set frameRate(value: string) {
-        this._frameRate = value;
+        Render.throttleMode = value === "slow" ? 1 : value === "mouse" ? 2 : value === "sleep" ? 3 : 0;
     }
 
     /** @internal @blueprintEvent */

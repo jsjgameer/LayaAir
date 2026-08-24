@@ -173,6 +173,7 @@ export class BloomEffect extends PostProcessEffect {
         let subShader = new SubShader(attributeMap, uniformMap);
         shader.addSubShader(subShader);
         let shaderPass = subShader.addShaderPass(CompositeVS, CompositePS);
+        shaderPass.statefirst = true;
         let renderState = shaderPass.renderState;
         renderState.depthTest = RenderState.DEPTHTEST_ALWAYS;
         renderState.depthWrite = false;
@@ -197,6 +198,9 @@ export class BloomEffect extends PostProcessEffect {
     private _shader: Shader3D = null;
     /**@internal */
     private _shaderData: ShaderData = LayaGL.renderDeviceFactory.createShaderData(null);
+
+    private _compositeShaderData: ShaderData = LayaGL.renderDeviceFactory.createShaderData(null);
+
     /**@internal */
     private _linearColor: Color = new Color();
     /**@internal */
@@ -233,6 +237,9 @@ export class BloomEffect extends PostProcessEffect {
 
     /**是否开启快速模式。该模式通过降低质量来提升性能。*/
     private _fastMode: boolean = false;
+
+    /**泛光金字塔的相对质量系数,1.0 = 与旧版一致(半分辨率起步),0.5 = 1/4 分辨率(省带宽),2.0 = 全分辨率(高质量)。*/
+    private _resolutionScale: number = 1.0;
 
     /**镜头污渍纹路,用于为泛光特效增加污渍灰尘效果*/
     private _dirtTexture: BaseTexture = null;
@@ -358,6 +365,18 @@ export class BloomEffect extends PostProcessEffect {
     set dirtIntensity(value: number) {
         this._dirtIntensity = Math.max(value, 0.0);
     }
+
+    /**
+     * @en Relative quality scale of the bloom pyramid. 1.0 (default) matches the legacy half-resolution behavior. Set to 0.5 to start the pyramid at quarter resolution, saving approximately 3/4 of bloom processing bandwidth at the cost of more visible blur and aliasing. Set to 2.0 to start at full resolution (highest quality, highest cost). Clamped to [0.125, 2.0]. The actual pyramid base size is approximately `viewport * scale / 2`.
+     * @zh 泛光金字塔的相对质量系数。1.0（默认）等价于旧版半分辨率行为。设为 0.5 时金字塔从 1/4 分辨率开始构建,约可节省 3/4 的泛光处理带宽,代价是模糊更明显、可能出现更多锯齿。设为 2.0 时从全分辨率起步(质量最高、开销最大)。取值范围 [0.125, 2.0]。金字塔起始尺寸约为 `viewport × scale / 2`。
+     */
+    get resolutionScale(): number {
+        return this._resolutionScale;
+    }
+
+    set resolutionScale(value: number) {
+        this._resolutionScale = Math.min(Math.max(value, 0.125), 2.0);
+    }
     /**
      * @en initializate the bloom effect instance.
      * @zh 初始化泛光效果实例。
@@ -424,17 +443,20 @@ export class BloomEffect extends PostProcessEffect {
         var cmd: CommandBuffer = context.command;
         var viewport: Viewport = context.camera.viewport;
 
+        const shaderData = this._shaderData;
+
         //应用自动曝光调整纹理
-        this._shaderData.setTexture(BloomEffect.SHADERVALUE_AUTOEXPOSURETEX, Texture2D.whiteTexture);
+        shaderData.setTexture(BloomEffect.SHADERVALUE_AUTOEXPOSURETEX, Texture2D.whiteTexture);
 
         //获取垂直扭曲和水平扭曲宽高
         var ratio: number = this._anamorphicRatio;
         var rw: number = ratio < 0 ? -ratio : 0;
         var rh: number = ratio > 0 ? ratio : 0;
 
-        //半分辨率模糊,性效比较高
-        var tw: number = Math.floor(viewport.width / (2 - rw));
-        var th: number = Math.floor(viewport.height / (2 - rh));
+        //_resolutionScale 以旧版半分辨率为 1.0 基准:除数 = 2 / scale。scale=1 → 除2(旧默认),scale=0.5 → 除4(省3/4带宽),scale=2 → 除1(全分辨率)。除数下限 1 保证起始尺寸不超过 viewport。
+        var invScale: number = 2 / this._resolutionScale;
+        var tw: number = Math.floor(viewport.width / Math.max(invScale - rw, 1));
+        var th: number = Math.floor(viewport.height / Math.max(invScale - rh, 1));
 
         //计算迭代次数
         var s: number = Math.max(tw, th);
@@ -443,38 +465,39 @@ export class BloomEffect extends PostProcessEffect {
         var logsInt: number = Math.floor(logs);
         var iterations: number = Math.min(Math.max(logsInt, 1), BloomEffect.MAXPYRAMIDSIZE);
         var sampleScale: number = 0.5 + logs - logsInt;
-        this._shaderData.setNumber(BloomEffect.SHADERVALUE_SAMPLESCALE, sampleScale);
+        shaderData.setNumber(BloomEffect.SHADERVALUE_SAMPLESCALE, sampleScale);
 
         //预过滤参数
         var lthresh: number = Color.gammaToLinearSpace(this.threshold);
         var knee: number = lthresh * this._softKnee + 1e-5;
         this._shaderThreshold.setValue(lthresh, lthresh - knee, knee * 2, 0.25 / knee);
-        this._shaderData.setVector(BloomEffect.SHADERVALUE_THRESHOLD, this._shaderThreshold);
+        shaderData.setVector(BloomEffect.SHADERVALUE_THRESHOLD, this._shaderThreshold);
         var lclamp: number = Color.gammaToLinearSpace(this.clamp);
 
         this._shaderParams.setValue(lclamp, 0, 0, 0);
-        this._shaderData.setVector(BloomEffect.SHADERVALUE_PARAMS, this._shaderParams);
+        shaderData.setVector(BloomEffect.SHADERVALUE_PARAMS, this._shaderParams);
 
         var qualityOffset: number = this.fastMode ? 1 : 0;
 
         // Downsample
         var lastDownTexture: RenderTexture = context.indirectTarget;
+        let format = lastDownTexture.format as unknown as RenderTargetFormat;
         for (var i: number = 0; i < iterations; i++) {
             var downIndex: number = i * 2;
             var upIndex: number = downIndex + 1;
             var subShader: number = i == 0 ? BloomEffect.SUBSHADER_PREFILTER13 + qualityOffset : BloomEffect.SUBSHADER_DOWNSAMPLE13 + qualityOffset;
 
-            var mipDownTexture: RenderTexture = RenderTexture.createFromPool(tw, th, RenderTargetFormat.R8G8B8A8, RenderTargetFormat.None, false, 1, false, true);
+            var mipDownTexture: RenderTexture = RenderTexture.createFromPool(tw, th, format, RenderTargetFormat.None, false, 1, false, true);
             mipDownTexture.filterMode = FilterMode.Bilinear;
             this._pyramid[downIndex] = mipDownTexture;
 
             if (i !== iterations - 1) {
-                var mipUpTexture: RenderTexture = RenderTexture.createFromPool(tw, th, RenderTargetFormat.R8G8B8A8, RenderTargetFormat.None, false, 1, false, true);
+                var mipUpTexture: RenderTexture = RenderTexture.createFromPool(tw, th, format, RenderTargetFormat.None, false, 1, false, true);
                 mipUpTexture.filterMode = FilterMode.Bilinear;
                 this._pyramid[upIndex] = mipUpTexture;
             }
 
-            cmd.blitScreenTriangle(lastDownTexture, mipDownTexture, null, this._shader, this._shaderData, subShader);
+            cmd.blitScreenTriangle(lastDownTexture, mipDownTexture, null, this._shader, shaderData, subShader);
 
             lastDownTexture = mipDownTexture;
             tw = Math.max(Math.floor(tw / 2), 1);
@@ -487,8 +510,8 @@ export class BloomEffect extends PostProcessEffect {
             upIndex = downIndex + 1;
             mipDownTexture = this._pyramid[downIndex];
             mipUpTexture = this._pyramid[upIndex];
-            cmd.setShaderDataTexture(this._shaderData, BloomEffect.SHADERVALUE_BLOOMTEX, mipDownTexture);//通过指令延迟设置
-            cmd.blitScreenTriangle(lastUpTexture, mipUpTexture, null, this._shader, this._shaderData, BloomEffect.SUBSHADER_UPSAMPLETENT + qualityOffset);
+            cmd.setShaderDataTexture(shaderData, BloomEffect.SHADERVALUE_BLOOMTEX, mipDownTexture);//通过指令延迟设置
+            cmd.blitScreenTriangle(lastUpTexture, mipUpTexture, null, this._shader, shaderData, BloomEffect.SUBSHADER_UPSAMPLETENT + qualityOffset);
             lastUpTexture = mipUpTexture;
         }
 
@@ -511,7 +534,8 @@ export class BloomEffect extends PostProcessEffect {
             dirtTileOffset.setValue(1.0, dirtRatio / screenRatio, 0.0, (1.0 - dirtTileOffset.y) * 0.5);
 
         //合成Shader属性
-        var compositeShaderData: ShaderData = context.compositeShaderData;
+        var compositeShaderData: ShaderData = this._compositeShaderData;
+
         if (this.fastMode)
             compositeShaderData.addDefine(PostProcess.SHADERDEFINE_BLOOM_LOW);
         else
@@ -523,6 +547,11 @@ export class BloomEffect extends PostProcessEffect {
         compositeShaderData.setVector(PostProcess.SHADERVALUE_BLOOM_SETTINGS, shaderSettings);
         compositeShaderData.setColor(PostProcess.SHADERVALUE_BLOOM_COLOR, linearColor);//TODO:需要Color支持
         compositeShaderData.setTexture(PostProcess.SHADERVALUE_BLOOM_DIRTTEX, usedirtTexture);
+        compositeShaderData.setTexture(BloomEffect.SHADERVALUE_AUTOEXPOSURETEX, Texture2D.whiteTexture);
+
+        // cmd.setShaderDataTexture(compositeShaderData, PostProcess.SHADERVALUE_BLOOMTEX, lastUpTexture);
+        // cmd.setShaderDataVector(compositeShaderData, PostProcess.SHADERVALUE_BLOOMTEX_TEXELSIZE, this._bloomTextureTexelSize);
+
         compositeShaderData.setTexture(PostProcess.SHADERVALUE_BLOOMTEX, lastUpTexture);
         compositeShaderData.setVector(PostProcess.SHADERVALUE_BLOOMTEX_TEXELSIZE, this._bloomTextureTexelSize);
 

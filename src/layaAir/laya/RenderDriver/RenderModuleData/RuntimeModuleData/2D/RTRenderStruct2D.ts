@@ -53,7 +53,21 @@ export class RTRenderStruct2D implements IRenderStruct2D {
 
    owner: Sprite;
 
-   globalAlpha: number = 1.0;
+   /** 手动渲染模式：子节点不参与父 pass 的自动遍历和渲染 */
+   private _manualRender: boolean = false;
+   get manualRender(): boolean {
+      return this._manualRender;
+   }
+   set manualRender(value: boolean) {
+      this._manualRender = value;
+      this._nativeObj.manualRender = value;
+   }
+
+   public get globalAlpha(): number {
+      return this._nativeObj.getGlobalAlpha();
+   }
+
+   private _clipRect: Rectangle = new Rectangle(0, 0, 0, 0);
 
    private _dcOptimize: boolean = false;
    public get dcOptimize(): boolean {
@@ -65,6 +79,9 @@ export class RTRenderStruct2D implements IRenderStruct2D {
    }
 
    public get inheritedDcOptimize(): boolean {
+      if (this._nativeObj.getInheritedDcOptimize) {
+         return this._nativeObj.getInheritedDcOptimize();
+      }
       return this._dcOptimize || this._parent?.dcOptimize;
    }
 
@@ -85,18 +102,15 @@ export class RTRenderStruct2D implements IRenderStruct2D {
    get stackingRoot(): boolean {
       return this._stackingRoot;
    }
-
-   private _enableCulling: boolean = false;
    get enableCulling(): boolean {
-      return this._enableCulling;
+      return this._nativeObj.getEnableCulling();
    }
    set enableCulling(value: boolean) {
-      this._enableCulling = value;
       this._nativeObj.setEnableCulling(value);
    }
 
    get inheritedEnableCulling(): boolean {
-      return this._enableCulling || this._parent?.enableCulling;
+      return this._nativeObj.getInheritedEnableCulling();
    }
 
    private _rect: Rectangle = new Rectangle(0, 0, 0, 0);
@@ -174,6 +188,9 @@ export class RTRenderStruct2D implements IRenderStruct2D {
    get renderUpdateMask(): number {
       return this._renderUpdateMask;
    }
+
+   /** @zh Transform2DStore slot(非 Web 后端暂不直读 store，保留字段以满足接口/未来 native 直读) */
+   transSlot: number = -1;
 
    private _renderMatrix: Matrix = new Matrix();
    set renderMatrix(value: Matrix) {
@@ -290,7 +307,6 @@ export class RTRenderStruct2D implements IRenderStruct2D {
       this.renderLayer = 1;
       this.renderType = -1;
       this.renderUpdateMask = 0;
-      this.globalAlpha = 1.0;
       this.alpha = 1.0;
       this.blendMode = BlendMode.invalid;
       this.enabled = true;
@@ -303,8 +319,16 @@ export class RTRenderStruct2D implements IRenderStruct2D {
       else
          this._nativeObj.setRenderUpdate(null);
    }
+   
    setClipRect(rect: Rectangle): void {
-      this._nativeObj.setClipRect(rect);
+      if (rect) {
+         rect.cloneTo(this._clipRect);
+         this._clipRect.width = Math.max(this._clipRect.width, 0.0001);
+         this._clipRect.height = Math.max(this._clipRect.height, 0.0001);
+         this._nativeObj.setClipRect(this._clipRect);
+      } else {
+         this._nativeObj.setClipRect(null);
+      }
    }
 
    setRepaint(): void {

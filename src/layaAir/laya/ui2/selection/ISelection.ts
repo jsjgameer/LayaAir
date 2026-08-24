@@ -1,5 +1,6 @@
 import { Event } from "../../events/Event";
 import { SelectionMode } from "../Const";
+import { ControllerRef } from "../ControllerRef";
 import type { GWidget } from "../GWidget";
 
 export interface ISelection {
@@ -21,6 +22,13 @@ export interface ISelection {
      */
     get index(): number;
     set index(value: number);
+
+    /**
+     * @en The controller associated with the selection.
+     * @zh 与选择关联的控制器。
+     */
+    get controller(): ControllerRef;
+    set controller(value: ControllerRef);
 
     /**
      * @en The currently selected items.
@@ -90,7 +98,7 @@ export interface ISelection {
     handleClick(item: GWidget, evt: Event): void;
 
     /** @ignore @blueprintIgnore */
-    handleArrowKey(dir: number): number;
+    handleArrowKey(dir: number, evt?: Event): number;
 
     /** @internal */
     destroy(): void;

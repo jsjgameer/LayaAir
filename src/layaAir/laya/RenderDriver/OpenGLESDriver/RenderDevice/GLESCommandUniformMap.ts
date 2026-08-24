@@ -1,10 +1,17 @@
-import { CommandUniformMap, UniformProperty } from "../../DriverDesign/RenderDevice/CommandUniformMap";
+import { BaseTexture } from "../../../resource/BaseTexture";
+import { CommandUniformMap, UniformOptions, UniformProperty } from "../../DriverDesign/RenderDevice/CommandUniformMap";
 import { ShaderDataType } from "../../DriverDesign/RenderDevice/ShaderData";
 
 export class GLESCommandUniformMap extends CommandUniformMap {
     _nativeObj: any;
+    /**@internal */
+    _idata: Map<number, UniformProperty> = new Map<number, UniformProperty>();
+
+    _stateName: string;
+
     constructor(stateName: string) {
         super(stateName);
+        this._stateName = stateName;
         this._nativeObj = new (window as any).conchGLESCommandUniformMap.create(stateName);
     }
     /**
@@ -13,8 +20,11 @@ export class GLESCommandUniformMap extends CommandUniformMap {
      * @param propertyID 
      * @param propertyKey 
      */
-    addShaderUniform(propertyID: number, propertyKey: string, uniformtype: ShaderDataType): void {
+    addShaderUniform(propertyID: number, propertyKey: string, uniformtype: ShaderDataType, options?: UniformOptions): void {
         this._nativeObj.addShaderUniform(propertyID, propertyKey, uniformtype);
+
+        let uniform = { id: propertyID, uniformtype: uniformtype, propertyName: propertyKey, arrayLength: 0, format: options?.format, access: options?.access }
+        this._idata.set(propertyID, uniform);
     }
 
     /**
@@ -24,5 +34,13 @@ export class GLESCommandUniformMap extends CommandUniformMap {
         //if (uniformtype !== ShaderDataType.Matrix4x4 && uniformtype !== ShaderDataType.Vector4)
         //    throw ('because of align rule, the engine does not support other types as arrays.');
         this._nativeObj.addShaderUniformArray(propertyID, propertyName, uniformtype, arrayLength);
+        this._idata.set(propertyID, { id: propertyID, uniformtype: uniformtype, propertyName: propertyName, arrayLength: arrayLength });
+    }
+
+    /**
+     * 设置默认值
+     */
+    setDefaultTextureData(key: number, defaultTex: BaseTexture) {
+       
     }
 }

@@ -39,7 +39,7 @@ export class DrawRectCmd implements IGraphicsCmd {
     height: number = 1;
     /**
      * @en The fill color  
-     * @zh 填充颜色 
+     * @zh 填充颜色.
      */
     fillColor: any;
     /**
@@ -132,6 +132,13 @@ export class DrawRectCmd implements IGraphicsCmd {
      */
     get cmdID(): string {
         return DrawRectCmd.ID;
+    }
+
+    /**
+     * @ignore @blueprintIgnore
+     */
+    needsLayoutRepaint(): number {
+        return this.percent ? 1 : 0;
     }
 
     /**

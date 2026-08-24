@@ -33,6 +33,8 @@ import { RenderTargetFormat } from "../../../RenderEngine/RenderEnum/RenderTarge
 import { Config3D } from "../../../../Config3D";
 import { WebGLUniformBufferManager } from "./WebGLUniformBufferManager";
 import { Config } from "../../../../Config";
+import { RenderState } from "../../RenderModuleData/Design/RenderState";
+import { BlendType } from "../../../RenderEngine/RenderEnum/BlendType";
 
 /**
  * 封装Webgl
@@ -169,31 +171,17 @@ export class WebGLEngine extends EventDispatcher implements IRenderEngine {
     }
 
     getInnerWidth() {
-        if (LayaEnv.isConch) {
-            return (window as any).getInnerWidth();
-        } else
-            return this._globalWidth;
+        return this._globalWidth;
     }
 
     getInnerHeight() {
-        if (LayaEnv.isConch) {
-            return (window as any).getInnerHeight();
-        } else
-            return this._globalHeight;
+        return this._globalHeight;
     }
 
 
     resizeOffScreen(width: number, height: number): void {
         this._globalWidth = width;
         this._globalHeight = height;
-        if (LayaEnv.isConch) {
-            if (WebGLEngine._lastFrameBuffer) {
-                WebGLEngine._lastFrameBuffer.dispose();
-                WebGLEngine._lastFrameBuffer_WebGLOBJ = null;
-            }
-            WebGLEngine._lastFrameBuffer = this.getTextureContext().createRenderTargetInternal(width, height, RenderTargetFormat.R8G8B8A8, RenderTargetFormat.None, false, false, 1, false) as WebGLInternalRT;
-            WebGLEngine._lastFrameBuffer_WebGLOBJ = WebGLEngine._lastFrameBuffer._framebuffer;
-        }
     }
     addTexGammaDefine(key: number, value: ShaderDefine): void {
         WebGLEngine._texGammaDefine[key] = value;
@@ -260,9 +248,9 @@ export class WebGLEngine extends EventDispatcher implements IRenderEngine {
         this._GLTextureContext = this.isWebGL2 ? new GL2TextureContext(this) : new GLTextureContext(this);
         this._GLRenderDrawContext = new GLRenderDrawContext(this);
 
-        canvas.addEventListener("webglcontextlost", this.webglContextLost)
+        canvas.addEventListener("webglcontextlost", this.webglContextLost.bind(this))
         Config._uniformBlock = Config.enableUniformBufferObject && this.getCapable(RenderCapable.UnifromBufferObject);
-        Config.matUseUBO = Config.matUseUBO && this.getCapable(RenderCapable.UnifromBufferObject);
+        Config.matUseUBO = Config.matUseUBO && this.getCapable(RenderCapable.UnifromBufferObject) && Config.enableUniformBufferObject;
         this._initBufferBlock();
     }
 
@@ -378,6 +366,7 @@ export class WebGLEngine extends EventDispatcher implements IRenderEngine {
         if (clearFlag & RenderClearFlag.Stencil) {
             this._context.clearStencil(clearStencilValue);
             this._GLRenderState.setStencilWrite(true);
+            this._GLRenderState.setStencilWriteMask(0xFF);
             flag |= this._context.STENCIL_BUFFER_BIT;
         }
         if (flag)
@@ -515,6 +504,103 @@ export class WebGLEngine extends EventDispatcher implements IRenderEngine {
         this._GLBindVertexArray = null;
     }
 
+
+
+    /**
+     * 
+     * @param renderState 
+     */
+    hashRenderState(renderState: RenderState) {
+
+        let rasterMask = 0;
+        {
+            let bitOffset = 0;
+
+            rasterMask |= (renderState.cull & 0x3) << bitOffset;
+            bitOffset += 2;
+
+            rasterMask |= (renderState.blend & 0x3) << bitOffset;
+            bitOffset += 2;
+
+            switch (renderState.blend) {
+                case BlendType.BLEND_DISABLE:
+                    // padding for rgb and alpha
+                    bitOffset += (4 + 4 + 3) * 2;
+                    break;
+                case BlendType.BLEND_ENABLE_ALL:
+                    rasterMask |= (renderState.srcBlend & 0xF) << bitOffset;
+                    bitOffset += 4;
+                    rasterMask |= (renderState.dstBlend & 0xF) << bitOffset;
+                    bitOffset += 4;
+                    rasterMask |= (renderState.blendEquation & 0x7) << bitOffset;
+                    bitOffset += 3;
+
+                    // padding for alpha
+                    bitOffset += 4 + 4 + 3;
+                    break;
+                case BlendType.BLEND_ENABLE_SEPERATE:
+                    rasterMask |= (renderState.srcBlendRGB & 0xF) << bitOffset;
+                    bitOffset += 4;
+                    rasterMask |= (renderState.dstBlendRGB & 0xF) << bitOffset;
+                    bitOffset += 4;
+                    rasterMask |= (renderState.blendEquationRGB & 0x7) << bitOffset;
+                    bitOffset += 3;
+
+                    rasterMask |= (renderState.srcBlendAlpha & 0xF) << bitOffset;
+                    bitOffset += 4;
+                    rasterMask |= (renderState.dstBlendAlpha & 0xF) << bitOffset;
+                    bitOffset += 4;
+                    rasterMask |= (renderState.blendEquationAlpha & 0x7) << bitOffset;
+                    bitOffset += 3;
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        let depthStencilMask = 0;
+        {
+            let bitOffset = 0;
+            depthStencilMask |= (renderState.depthTest & 0xF) << bitOffset;
+            bitOffset += 4;
+            depthStencilMask |= (renderState.depthWrite ? 1 : 0) << bitOffset;
+            bitOffset += 1;
+            depthStencilMask |= (renderState.depthBias ? 1 : 0) << bitOffset;
+            bitOffset += 1;
+
+            depthStencilMask |= (renderState.stencilTest & 0xF) << bitOffset;
+            bitOffset += 4;
+            depthStencilMask |= (renderState.stencilOp.x & 0x7) << bitOffset;
+            bitOffset += 3;
+            depthStencilMask |= (renderState.stencilOp.y & 0x7) << bitOffset;
+            bitOffset += 3;
+            depthStencilMask |= (renderState.stencilOp.z & 0x7) << bitOffset;
+            bitOffset += 3;
+            depthStencilMask |= (renderState.stencilWrite ? 1 : 0) << bitOffset;
+            bitOffset += 1;
+        }
+
+        let stencilMask = 0;
+        {
+            let bitOffset = 0;
+            stencilMask |= (renderState.stencilReadMask & 0xFF) << bitOffset;
+            bitOffset += 8;
+            stencilMask |= (renderState.stencilWriteMask & 0xFF) << bitOffset;
+            bitOffset += 8;
+            stencilMask |= (renderState.stencilRef & 0xFF) << bitOffset;
+            bitOffset += 8;
+        }
+
+        renderStateHashF32[0] = renderState.depthBiasConstant;
+        renderStateHashF32[1] = renderState.depthBiasSlopeScale;
+        renderStateHashF32[2] = renderState.depthBiasClamp;
+
+        return `${rasterMask}_${depthStencilMask}_${stencilMask}_${renderStateHashU32.join()}`;
+    }
+
 }
+
+const renderStateHashF32 = new Float32Array(3);
+const renderStateHashU32 = new Uint32Array(renderStateHashF32.buffer);
 
 

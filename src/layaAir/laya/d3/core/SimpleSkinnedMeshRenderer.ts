@@ -12,6 +12,7 @@ import { RenderContext3D } from "./render/RenderContext3D";
 import { SimpleSkinnedMeshSprite3D } from "./SimpleSkinnedMeshSprite3D";
 import { LayaGL } from "../../layagl/LayaGL";
 import { StatElement } from "../../layagl/StatisticsContext";
+import { propertyChangeFlag } from "./render/BaseRender";
 
 export class SimpleSkinnedMeshRenderer extends SkinnedMeshRenderer {
     private _simpleAnimatorTexture: Texture2D;
@@ -20,15 +21,16 @@ export class SimpleSkinnedMeshRenderer extends SkinnedMeshRenderer {
     private _simpleAnimatorTextureSize: number;
     /**  x simpleAnimation offset,y simpleFrameOffset*/
     private _simpleAnimatorOffset: Vector2;
-    /**@internal */
+    /**
+     * @en The number of bones.
+     * @zh 骨骼数量
+     */
     _bonesNums: number;
-
 
     //解决编译bug TODO
     private _ownerSimpleRenderNode: ISimpleSkinRenderNode;
 
     /**
-     * @internal
      * @en The animator texture
      * @zh 动画帧贴图
      */
@@ -36,9 +38,6 @@ export class SimpleSkinnedMeshRenderer extends SkinnedMeshRenderer {
         return this._simpleAnimatorTexture;
     }
 
-    /**
-     * @internal
-     */
     set simpleAnimatorTexture(value: Texture2D) {
         this._simpleAnimatorTexture = value;
         this._simpleAnimatorTextureSize = value.width;
@@ -127,6 +126,10 @@ export class SimpleSkinnedMeshRenderer extends SkinnedMeshRenderer {
             this._simpleAnimatorParams.y = Math.round(this._simpleAnimatorOffset.y) * this._bonesNums * 4;
 
             this._ownerSimpleRenderNode.setSimpleAnimatorParams(this._simpleAnimatorParams);
+
+            if (this._batchRender) {
+                this._batchRender.updateProperty(this, propertyChangeFlag.SimpleSkineParam);
+            }
         }
     }
 

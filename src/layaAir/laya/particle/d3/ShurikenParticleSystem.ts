@@ -6,7 +6,7 @@ import { Transform3D } from "../../d3/core/Transform3D";
 import { IndexBuffer3D } from "../../d3/graphics/IndexBuffer3D";
 import { VertexBuffer3D } from "../../d3/graphics/VertexBuffer3D";
 import { Bounds } from "../../d3/math/Bounds";
-import { Rand } from "../../d3/math/Rand";
+import { Rand } from "../../maths/Rand";
 import { Laya3DRender } from "../../d3/RenderObjs/Laya3DRender";
 import { Mesh } from "../../d3/resource/models/Mesh";
 import { SerializeUtil } from "../../loaders/SerializeUtil";
@@ -325,8 +325,8 @@ export class ShurikenParticleSystem extends GeometryElement implements IClone {
     randomizeRotationDirection: number = 0;
 
     /**
-     * @en Start color mode. 0 for constant color, 2 for random between two constant colors. Two modes are missing.
-     * @zh 开始颜色模式。0为恒定颜色，2为两个恒定颜色的随机插值。缺少2种模式。
+     * @en Start color mode. 0 for constant color, 1 for Gradient, 2 for random between two constant colors, 3 for random between two Gradient colors.
+     * @zh 开始颜色模式。0为恒定颜色，1为Gradient，2为两个恒定颜色的随机插值，3为两个Gradient颜色的随机插值。
      */
     startColorType: number = 0;
     /**
@@ -344,6 +344,12 @@ export class ShurikenParticleSystem extends GeometryElement implements IClone {
      * @zh 最大开始颜色，1模式。
      */
     startColorConstantMax: Vector4 = new Vector4(1, 1, 1, 1);
+
+    startColorGradient: Gradient = new Gradient();
+
+    startColorGradientMin: Gradient = new Gradient();
+
+    startColorGradientMax: Gradient = new Gradient();
 
     /**
      * @en Gravity modifier.
@@ -387,6 +393,27 @@ export class ShurikenParticleSystem extends GeometryElement implements IClone {
      * @zh 是否为性能模式。性能模式下会延迟粒子释放。
      */
     isPerformanceMode: boolean = false;
+
+    protected _gradientKeyCount8: boolean = false;
+    /**
+     * @en Whether to use 8-key gradient mode. When enabled, gradient curves (velocity/size/rotation/textureSheet over lifetime) support up to 8 key points instead of 4. This increases shader complexity but provides finer control over particle animations.
+     * @zh 是否使用8关键点渐变模式。开启后，生命周期曲线（速度/尺寸/旋转/纹理动画）支持最多8个关键点（默认4个）。会增加shader复杂度，但能提供更精细的粒子动画控制。
+     */
+    get gradientKeyCount8(): boolean {
+        return this._gradientKeyCount8;
+    }
+
+    set gradientKeyCount8(value: boolean) {
+        if (this._gradientKeyCount8 !== value) {
+            this._gradientKeyCount8 = value;
+            var shaDat: ShaderData = this._ownerRender._baseRenderNode.shaderData;
+            if (value) {
+                shaDat.addDefine(ShuriKenParticle3DShaderDeclaration.SHADERDEFINE_GRADIENTKEYCOUNT_8);
+            } else {
+                shaDat.removeDefine(ShuriKenParticle3DShaderDeclaration.SHADERDEFINE_GRADIENTKEYCOUNT_8);
+            }
+        }
+    }
 
     /**
      * @en Maximum number of particles
@@ -1778,6 +1805,9 @@ export class ShurikenParticleSystem extends GeometryElement implements IClone {
      * @internal
      */
     protected _advanceDistance(emitTime: number, elapsedTime: number): void {
+        if (this._ownerRender.renderMode === 4 && !this._ownerRender.mesh)
+            return;
+
         let position = this._owner.transform.position;
         let offsetDistance: number = Vector3.distance(position, this._emissionLastPosition);
 
@@ -1967,6 +1997,9 @@ export class ShurikenParticleSystem extends GeometryElement implements IClone {
         this.startColorConstant = null;
         this.startColorConstantMin = null;
         this.startColorConstantMax = null;
+        this.startColorGradient = null;
+        this.startColorGradientMin = null;
+        this.startColorGradientMax = null;
         this._velocityOverLifetime = null;
         this._colorOverLifetime = null;
         this._sizeOverLifetime = null;
@@ -2484,6 +2517,9 @@ export class ShurikenParticleSystem extends GeometryElement implements IClone {
         this.startColorConstant.cloneTo(destObject.startColorConstant);
         this.startColorConstantMin.cloneTo(destObject.startColorConstantMin);
         this.startColorConstantMax.cloneTo(destObject.startColorConstantMax);
+        this.startColorGradient.cloneTo(destObject.startColorGradient);
+        this.startColorGradientMin.cloneTo(destObject.startColorGradientMin);
+        this.startColorGradientMax.cloneTo(destObject.startColorGradientMax);
 
         destObject.gravityModifier = this.gravityModifier;
         destObject.simulationSpace = this.simulationSpace;
@@ -2506,6 +2542,7 @@ export class ShurikenParticleSystem extends GeometryElement implements IClone {
         //
 
         destObject.isPerformanceMode = this.isPerformanceMode;
+        destObject.gradientKeyCount8 = this._gradientKeyCount8;
 
         destObject._isEmitting = this._isEmitting;
         destObject._isPlaying = this._isPlaying;

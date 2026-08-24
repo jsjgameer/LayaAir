@@ -14,14 +14,14 @@ export function quaternionFromTo(from: Vector3, to: Vector3, out: Quaternion): b
         tmpVec3 = new Vector3();
     }
     var dot: number = Vector3.dot(from, to);
-    if (dot < -0.999999) {// 180度了，可以选择多个轴旋转
+    if (dot < -0.99999999) {// 180度了，可以选择多个轴旋转
         Vector3.cross(xUnitVec3, from, tmpVec3);
         if (Vector3.scalarLength(tmpVec3) < 0.000001)
             Vector3.cross(yUnitVec3, from, tmpVec3);
         Vector3.normalize(tmpVec3, tmpVec3);
         Quaternion.createFromAxisAngle(tmpVec3, Math.PI, out);
         return true
-    } else if (dot > 0.999999) {// 没有变化
+    } else if (dot > 0.99999999) {// 没有变化
         out.x = 0;
         out.y = 0;
         out.z = 0;
@@ -185,3 +185,36 @@ export function getVecAngInPlane(axisPos:Vector3, axis:Vector3, zero:Vector3, ve
     return angle;
 }
 
+export class NumberSmooth{
+    lastv=0;
+    constructor(
+        public k=0.5
+    ){
+    }
+
+    in(v:number){
+        let k = this.k;
+        let k1 = 1-k;
+        this.lastv = v*k+this.lastv*k1;
+        return this.lastv;
+    }
+}
+
+export class Vec3Smooth{
+    lastV:Vector3=null;
+    constructor(
+        public k=0.5
+    ){
+
+    }
+    in(v:Vector3){
+        let k = this.k;
+        let k1 = 1-k;
+        if(!this.lastV)
+            this.lastV = v.clone();
+        let v0 = this.lastV;
+        let v1 = v;
+        this.lastV.setValue(v1.x*k+v0.x*k1,v1.y*k+v0.y*k1,v1.z*k+v0.z*k1);
+        return this.lastV;
+    }
+}

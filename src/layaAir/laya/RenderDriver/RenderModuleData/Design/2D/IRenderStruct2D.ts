@@ -25,6 +25,9 @@ export interface IRenderStruct2D {
 
    subStruct: IRenderStruct2D;
 
+   /** 手动渲染模式：子节点不参与父 pass 的自动遍历和渲染 */
+   manualRender: boolean;
+
    owner: Sprite;
 
    //-----2d 渲染组织流程数据-----
@@ -48,9 +51,11 @@ export interface IRenderStruct2D {
    renderUpdateMask: number;
 
    //----- 渲染继承累加数据 -----
+   /** @zh 本节点在 Transform2DStore(SoA) 中的 slot。渲染底层据此按 slot 直读 world 数据。 */
+   transSlot: number;
    renderMatrix: Matrix;
    /** 非即时数据 */
-   globalAlpha: number;
+   readonly globalAlpha: number;
 
    alpha: number;
 

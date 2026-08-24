@@ -109,10 +109,10 @@ export class AnimatorControllerLayer implements IClone {
 
     set avatarMask(value: AvatarMask) {
         this._avatarMask = value;
+        this._animator?._refreshLayerAvatarMask(this); // 运行时变更下发给 native（RT）
     }
 
     /**
-     * @internal
      * @en The name of the default animation state machine for this layer.
      * @zh 此层的默认动画状态机的名称。
      */

@@ -7,6 +7,9 @@ import { Pool } from "../../utils/Pool"
 import { VertexStream } from "../../utils/VertexStream";
 import { IGraphicsBoundsAssembler, IGraphicsCmd } from "../IGraphics";
 import { GraphicsRunner } from "../Scene2DSpecial/GraphicsRunner";
+import { Config } from "../../../Config";
+import { UVClippingUtils } from "../../webgl/utils/UVClippingUtils";
+import { drawTrianglesBatched } from "./DrawTrianglesBatchHelper";
 
 const className = "Draw9GridTextureCmd";
 
@@ -60,8 +63,8 @@ export class Draw9GridTextureCmd implements IGraphicsCmd {
     sizeGrid: number[];
 
     /**
-     * @en Color tint for the texture (default: 0xffffffff)
-     * @zh 纹理的颜色色调（默认值：0xffffffff）
+     * @en Color tint for the texture (default: 0xffffffff). The format is ABGR.
+     * @zh 纹理的颜色色调（默认值：0xffffffff）。格式是ABGR。
      */
     color: number = 0xffffffff;
 
@@ -157,8 +160,22 @@ export class Draw9GridTextureCmd implements IGraphicsCmd {
 
             genSliceMesh(vb, vb.contentRect, vb.uvRect, gridRect, sizeGrid[4] === 1 ? 0xff : 0);
 
-            runner.drawTriangles(this.texture, x + gx, y + gy, vb.getVertices(), vb.getUVs(), vb.getIndices(),
-                null, 1, null, null, vb.getColors(), this.texture.uvrect);
+            if (this.texture.uvrect) {
+                if (Config.uvClipMode === "cpu") {
+                    const clippedData = UVClippingUtils.clipTrianglesByUVRange(
+                        vb.getVertices(), vb.getIndices(), vb.getUVs(), this.texture.uvrect, vb.getColors()
+                    );
+                    drawTrianglesBatched(runner, this.texture, x + gx, y + gy,
+                        clippedData.vertices, clippedData.uvs, clippedData.indices,
+                        null, 1, null, null, clippedData.colors, null);
+                } else {
+                    drawTrianglesBatched(runner, this.texture, x + gx, y + gy, vb.getVertices(), vb.getUVs(), vb.getIndices(),
+                        null, 1, null, null, vb.getColors(), this.texture.uvrect);
+                }
+            } else {
+                drawTrianglesBatched(runner, this.texture, x + gx, y + gy, vb.getVertices(), vb.getUVs(), vb.getIndices(),
+                    null, 1, null, null, vb.getColors(), null);
+            }
 
             VertexStream.pool.recover(vb);
         }
@@ -170,6 +187,13 @@ export class Draw9GridTextureCmd implements IGraphicsCmd {
      */
     get cmdID(): string {
         return Draw9GridTextureCmd.ID;
+    }
+
+    /**
+     * @ignore @blueprintIgnore
+     */
+    needsLayoutRepaint(): number {
+        return this.percent ? 1 : 0;
     }
 
     /**
